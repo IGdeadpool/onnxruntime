@@ -62,6 +62,62 @@ ORT profiling JSON 输出目录：
 ~/benchmarks/outputs/ort_profiles
 ```
 
+## 一键自动化 benchmark
+
+`run_full_benchmark.py` 会从配置文件读取参数，创建独立 run 目录，并为每一步生成对应输出。
+
+先复制一份本地配置：
+
+```bash
+cp ~/benchmarks/scripts/benchmark_config.example.json ~/benchmarks/scripts/benchmark_config.local.json
+```
+
+按需修改：
+
+```bash
+vim ~/benchmarks/scripts/benchmark_config.local.json
+```
+
+```bash
+cd ~/benchmarks
+source ~/torch-rocm/.venv/bin/activate
+
+python ~/benchmarks/scripts/run_full_benchmark.py \
+  --config ~/benchmarks/scripts/benchmark_config.local.json
+```
+
+命令行参数可以临时覆盖配置文件，例如只跑算子级 benchmark：
+
+```bash
+python ~/benchmarks/scripts/run_full_benchmark.py \
+  --config ~/benchmarks/scripts/benchmark_config.local.json \
+  --skip-baseline
+```
+
+每次运行会生成：
+
+```text
+~/benchmarks/runs/<run_id>/
+  00_run_config.json
+  metadata.json
+  steps_status.md
+  baseline_results.csv
+  operator_results.csv
+  operator_pair_summary.csv
+  profile_summary.csv
+  profile_summary.json
+  regression_report.csv
+  summary.md
+  logs/
+    01_environment.log
+    02_baseline.log
+    03_operator.log
+  ort_profiles/
+    *.json
+```
+
+其中 `steps_status.md` 是面向开发者阅读的步骤状态表，包含每一步状态、耗时、输出文件和失败原因。
+
 ## ORT Profile 可视化
 
 Windows 打开：

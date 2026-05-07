@@ -18,6 +18,9 @@ baseline_results*.csv
 operator_results*.csv
 ort_profiles/
 runs/
+benchmark_config.local.json
+_dryrun_bench/
+_dryrun_runs/
 
 .DS_Store
 Thumbs.db
