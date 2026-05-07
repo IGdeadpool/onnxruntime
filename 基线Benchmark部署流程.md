@@ -1,0 +1,767 @@
+# ResNet18 + DistilBERT 基线 Benchmark 部署流程
+
+本文档记录当前 WSL2 ROCm 环境中部署两个 baseline benchmark 的完整流程：
+
+- ResNet18 + CIFAR-10
+- DistilBERT + GLUE/SST-2
+
+当前机器环境：
+
+```text
+WSL: Ubuntu 24.04.4 LTS
+GPU: AMD Radeon RX 9070 XT
+ROCm: 7.2
+Python env: /home/l/torch-rocm/.venv
+Benchmark root: /home/l/benchmarks
+```
+
+## 1. 目录规划
+
+所有 benchmark 相关文件放在：
+
+```text
+/home/l/benchmarks
+```
+
+目录结构：
+
+```text
+/home/l/benchmarks
+├── data
+│   ├── cifar10
+│   └── huggingface_datasets
+├── models
+│   ├── torch
+│   └── huggingface
+├── outputs
+└── scripts
+```
+
+创建目录：
+
+```bash
+mkdir -p ~/benchmarks/{data,models,scripts,outputs}
+```
+
+## 2. 启动 Python 环境
+
+使用之前已经部署好的 ROCm PyTorch 虚拟环境：
+
+```bash
+cd ~/benchmarks
+source ~/torch-rocm/.venv/bin/activate
+```
+
+设置缓存目录：
+
+```bash
+export TORCH_HOME=/home/l/benchmarks/models/torch
+export HF_HOME=/home/l/benchmarks/models/huggingface
+export TRANSFORMERS_CACHE=/home/l/benchmarks/models/huggingface/transformers
+export HF_DATASETS_CACHE=/home/l/benchmarks/data/huggingface_datasets
+```
+
+如果要运行 ONNX Runtime MIGraphX，也设置：
+
+```bash
+export LD_LIBRARY_PATH=/opt/rocm-7.2.0/lib:/opt/rocm/lib:/usr/lib/wsl/lib:$LD_LIBRARY_PATH
+```
+
+## 3. 安装依赖
+
+依赖安装在 `/home/l/torch-rocm/.venv` 中：
+
+```bash
+pip install --upgrade --retries 10 --timeout 120 \
+  transformers datasets evaluate scikit-learn pandas requests
+```
+
+已有核心依赖：
+
+```text
+torch 2.9.1+rocm7.2.0
+torchvision 0.24.0+rocm7.2.0
+onnx 1.21.0
+onnxruntime-migraphx 1.23.2
+```
+
+## 4. ResNet18 + CIFAR-10 Baseline
+
+模型：
+
+```text
+torchvision.models.resnet18
+```
+
+权重：
+
+```text
+ResNet18_Weights.DEFAULT
+```
+
+数据集：
+
+```text
+CIFAR-10
+```
+
+推荐输入规格：
+
+```text
+Input shape: [N, 3, 224, 224]
+Batch sizes: 1, 8, 16, 32, 64
+Precision: FP32
+Metrics: latency, throughput, Top-1 accuracy
+```
+
+下载 ResNet18 权重和 CIFAR-10：
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from torchvision import datasets, transforms
+from torchvision.models import ResNet18_Weights, resnet18
+
+root = Path("/home/l/benchmarks")
+weights = ResNet18_Weights.DEFAULT
+
+model = resnet18(weights=weights).eval()
+print("ResNet18 ready:", weights)
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=weights.transforms().mean, std=weights.transforms().std),
+])
+
+train = datasets.CIFAR10(
+    root=str(root / "data" / "cifar10"),
+    train=True,
+    download=True,
+    transform=transform,
+)
+
+test = datasets.CIFAR10(
+    root=str(root / "data" / "cifar10"),
+    train=False,
+    download=True,
+    transform=transform,
+)
+
+print("CIFAR-10:", len(train), len(test))
+PY
+```
+
+当前状态：
+
+```text
+ResNet18 权重已下载到 /home/l/benchmarks/models/torch/hub/checkpoints
+CIFAR-10 还需要继续下载
+```
+
+## 5. DistilBERT + SST-2 Baseline
+
+模型：
+
+```text
+distilbert-base-uncased-finetuned-sst-2-english
+```
+
+数据集：
+
+```text
+GLUE / SST-2
+```
+
+推荐输入规格：
+
+```text
+Max sequence length: 128
+Batch sizes: 1, 4, 8, 16, 32
+Precision: FP32
+Metrics: latency, throughput, accuracy
+```
+
+下载 SST-2 和 DistilBERT：
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from datasets import load_dataset
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+root = Path("/home/l/benchmarks")
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+
+sst2 = load_dataset(
+    "glue",
+    "sst2",
+    cache_dir=str(root / "data" / "huggingface_datasets"),
+)
+print("SST-2 splits:", {k: len(v) for k, v in sst2.items()})
+
+tokenizer = AutoTokenizer.from_pretrained(
+    model_id,
+    cache_dir=str(root / "models" / "huggingface"),
+)
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    model_id,
+    cache_dir=str(root / "models" / "huggingface"),
+).eval()
+
+print("DistilBERT ready:", model_id)
+print("vocab size:", tokenizer.vocab_size)
+PY
+```
+
+## 6. 下载脚本
+
+已保存下载脚本：
+
+```text
+/home/l/benchmarks/scripts/download_baselines.py
+```
+
+运行方式：
+
+```bash
+cd ~/benchmarks
+source ~/torch-rocm/.venv/bin/activate
+
+export TORCH_HOME=/home/l/benchmarks/models/torch
+export HF_HOME=/home/l/benchmarks/models/huggingface
+export TRANSFORMERS_CACHE=/home/l/benchmarks/models/huggingface/transformers
+export HF_DATASETS_CACHE=/home/l/benchmarks/data/huggingface_datasets
+
+python ~/benchmarks/scripts/download_baselines.py
+```
+
+如果网络中断，可以重复运行。Torch 和 Hugging Face 都会复用缓存。
+
+## 7. 下载状态检查
+
+查看目录大小：
+
+```bash
+du -h -d 4 ~/benchmarks | sort -h | tail -60
+```
+
+查看 ResNet18 权重：
+
+```bash
+ls -lh ~/benchmarks/models/torch/hub/checkpoints
+```
+
+查看 CIFAR-10：
+
+```bash
+find ~/benchmarks/data/cifar10 -maxdepth 3 -type f | head
+```
+
+查看 Hugging Face 缓存：
+
+```bash
+find ~/benchmarks/models/huggingface -maxdepth 4 -type f | head
+find ~/benchmarks/data/huggingface_datasets -maxdepth 4 -type f | head
+```
+
+## 8. 验证脚本
+
+验证 ResNet18：
+
+```bash
+python - <<'PY'
+import torch
+from torchvision.models import ResNet18_Weights, resnet18
+
+model = resnet18(weights=ResNet18_Weights.DEFAULT).eval().cuda()
+x = torch.randn(8, 3, 224, 224, device="cuda")
+with torch.no_grad():
+    y = model(x)
+torch.cuda.synchronize()
+print(y.shape, y.device)
+PY
+```
+
+验证 DistilBERT：
+
+```bash
+python - <<'PY'
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir="/home/l/benchmarks/models/huggingface")
+model = AutoModelForSequenceClassification.from_pretrained(
+    model_id,
+    cache_dir="/home/l/benchmarks/models/huggingface",
+).eval().cuda()
+
+inputs = tokenizer(
+    ["this movie is great", "this movie is terrible"],
+    padding="max_length",
+    truncation=True,
+    max_length=128,
+    return_tensors="pt",
+)
+inputs = {k: v.cuda() for k, v in inputs.items()}
+
+with torch.no_grad():
+    out = model(**inputs)
+torch.cuda.synchronize()
+print(out.logits.shape, out.logits.device)
+PY
+```
+
+## 9. 预期完成状态
+
+完成后应具备：
+
+```text
+ResNet18 权重缓存
+CIFAR-10 train/test 数据
+DistilBERT SST-2 fine-tuned 模型和 tokenizer
+GLUE/SST-2 train/validation/test 数据
+```
+
+这两个 baseline 后续可用于：
+
+```text
+PyTorch ROCm latency/throughput benchmark
+PyTorch -> ONNX export
+ONNX Runtime MIGraphX inference benchmark
+CPU fallback comparison
+```
+
+## 10. 运行 Benchmark 脚本
+
+已生成统一 benchmark 脚本：
+
+```text
+Windows:
+C:\Users\57323\Desktop\runtime\benchmark_baselines.py
+
+WSL:
+/home/l/benchmarks/scripts/benchmark_baselines.py
+```
+
+进入 WSL 后，先启用环境：
+
+```bash
+cd ~/benchmarks
+source ~/torch-rocm/.venv/bin/activate
+
+export TORCH_HOME=/home/l/benchmarks/models/torch
+export HF_HOME=/home/l/benchmarks/models/huggingface
+export HF_DATASETS_CACHE=/home/l/benchmarks/data/huggingface_datasets
+export LD_LIBRARY_PATH=/opt/rocm-7.2.0/lib:/opt/rocm/lib:/usr/lib/wsl/lib:$LD_LIBRARY_PATH
+```
+
+运行完整 benchmark：
+
+```bash
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --models all \
+  --backends all \
+  --warmup 10 \
+  --iters 50 \
+  --output ~/benchmarks/outputs/baseline_results.csv
+```
+
+只运行 PyTorch ROCm：
+
+```bash
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --models all \
+  --backends torch \
+  --warmup 10 \
+  --iters 50 \
+  --output ~/benchmarks/outputs/pytorch_rocm_results.csv
+```
+
+只运行 ONNX Runtime MIGraphX：
+
+```bash
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --models all \
+  --backends onnx \
+  --warmup 10 \
+  --iters 50 \
+  --output ~/benchmarks/outputs/onnx_migraphx_results.csv
+```
+
+只跑 ResNet18：
+
+```bash
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --models resnet18 \
+  --backends all \
+  --resnet-batches 1,8,16,32,64 \
+  --output ~/benchmarks/outputs/resnet18_results.csv
+```
+
+只跑 DistilBERT：
+
+```bash
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --models distilbert \
+  --backends all \
+  --bert-batches 1,4,8,16,32 \
+  --seq-len 128 \
+  --output ~/benchmarks/outputs/distilbert_results.csv
+```
+
+快速 smoke test：
+
+```bash
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --models resnet18 \
+  --backends torch \
+  --resnet-batches 1 \
+  --warmup 0 \
+  --iters 1 \
+  --output ~/benchmarks/outputs/smoke_results.csv
+```
+
+## 11. Benchmark 参数说明
+
+脚本参数：
+
+```text
+--models
+```
+
+选择模型。可选：
+
+```text
+all
+resnet18
+distilbert
+```
+
+```text
+--backends
+```
+
+选择运行后端。可选：
+
+```text
+all
+torch
+onnx
+```
+
+其中：
+
+```text
+torch -> PyTorch ROCm
+onnx  -> ONNX Runtime MIGraphXExecutionProvider + CPUExecutionProvider fallback
+```
+
+```text
+--resnet-batches
+```
+
+ResNet18 batch size 列表，例如：
+
+```text
+1,8,16,32,64
+```
+
+```text
+--bert-batches
+```
+
+DistilBERT batch size 列表，例如：
+
+```text
+1,4,8,16,32
+```
+
+```text
+--seq-len
+```
+
+DistilBERT 输入序列长度，默认：
+
+```text
+128
+```
+
+```text
+--warmup
+```
+
+正式计时前的预热轮数。预热用于排除首次 GPU 初始化、kernel 编译和缓存构建的影响。
+
+```text
+--iters
+```
+
+正式计时轮数。数值越大，统计越稳定，但运行时间越长。
+
+```text
+--output
+```
+
+CSV 输出路径。
+
+## 12. CSV 字段说明
+
+输出 CSV 字段：
+
+```text
+model
+```
+
+模型名称，例如 `resnet18` 或 `distilbert-base-uncased-finetuned-sst-2-english`。
+
+```text
+dataset
+```
+
+数据集名称，例如 `cifar10` 或 `glue/sst2-validation`。
+
+```text
+backend
+```
+
+运行后端，例如：
+
+```text
+torch_rocm
+onnxruntime:MIGraphXExecutionProvider,CPUExecutionProvider
+```
+
+```text
+batch_size
+```
+
+每次推理的样本数。
+
+```text
+seq_len
+```
+
+文本模型的序列长度。ResNet18 没有该字段，因此为空。
+
+```text
+samples_per_sec
+```
+
+吞吐量，每秒处理样本数：
+
+```text
+samples_per_sec = batch_size / (latency_mean_ms / 1000)
+```
+
+```text
+latency_mean_ms
+latency_p50_ms
+latency_p95_ms
+latency_min_ms
+latency_max_ms
+```
+
+单个 batch 的推理延迟统计，单位毫秒。
+
+```text
+metric_name
+metric_value
+```
+
+附带的简单验证指标。
+
+当前脚本中：
+
+```text
+ResNet18: pseudo_top1
+DistilBERT: pred_positive_ratio
+```
+
+说明：ResNet18 当前使用 ImageNet 预训练权重跑 CIFAR-10，类别不匹配，因此 `pseudo_top1` 只用于 smoke test，不代表真实 CIFAR-10 accuracy。
+
+```text
+gpu_mem_mb
+```
+
+PyTorch ROCm 后端的 PyTorch allocator 峰值显存，单位 MB。
+
+ONNX Runtime MIGraphX 行该字段为空，因为 ONNX Runtime 的显存分配不经过 PyTorch allocator，`torch.cuda.max_memory_allocated()` 无法统计 MIGraphX 的显存。
+
+## 13. 完整自动化测试流程建议
+
+当前建议将测试流程固定为三步：
+
+```text
+第一步：模型级 benchmark
+第二步：算子级 benchmark
+第三步：ORT profiling JSON 导入可视化工具
+```
+
+### 13.1 模型级 benchmark
+
+```bash
+cd ~/benchmarks
+source ~/torch-rocm/.venv/bin/activate
+
+python ~/benchmarks/scripts/benchmark_baselines.py \
+  --output ~/benchmarks/outputs/baseline_results.csv
+```
+
+输出：
+
+```text
+/home/l/benchmarks/outputs/baseline_results.csv
+```
+
+用于判断：
+
+```text
+ResNet18 / DistilBERT 能否跑通
+Torch ROCm 和 ONNX Runtime 的端到端延迟差异
+batch size 增大后的吞吐变化
+是否存在明显 p95 抖动
+```
+
+### 13.2 算子级 benchmark
+
+推荐使用 large profile 和 chain_len=10：
+
+```bash
+cd ~/benchmarks
+source ~/torch-rocm/.venv/bin/activate
+
+python ~/benchmarks/scripts/operator_benchmark.py \
+  --backends all \
+  --batches 1,8,16 \
+  --shape-profile large \
+  --chain-len 10 \
+  --repeat 3 \
+  --warmup 10 \
+  --iters 50 \
+  --output ~/benchmarks/outputs/operator_results_v2.csv
+```
+
+输出：
+
+```text
+/home/l/benchmarks/outputs/operator_results_v2.csv
+/home/l/benchmarks/outputs/ort_profiles/*.json
+```
+
+用于判断：
+
+```text
+哪些算子可运行
+哪些算子有 ORT/MIGraphX 优势
+哪些算子更可能受 launch overhead / memory overhead / fusion 缺失影响
+profile JSON 是否能确认 Node provider 为 MIGraphXExecutionProvider
+```
+
+### 13.3 导入 ORT profile 可视化工具
+
+Windows 侧工具：
+
+```text
+C:\Users\57323\Desktop\runtime\ORT_Profile_Analyzer_WinForms.exe
+```
+
+使用方式：
+
+```text
+1. 打开 exe
+2. Run label 填本轮测试名称，例如 before_driver_fix
+3. Notes 填驱动、ROCm、ONNX Runtime、MIGraphX、固件或编译器版本
+4. Import JSON 选择 /home/l/benchmarks/outputs/ort_profiles 中的 JSON
+5. 优化后重复导入，Run label 填 after_xxx
+6. 查看 Comparison by op + batch
+```
+
+如果要从 Windows 资源管理器访问 WSL profile 目录：
+
+```text
+\\wsl.localhost\Ubuntu\home\l\benchmarks\outputs\ort_profiles
+```
+
+### 13.4 建议新增 run 归档
+
+当前 `baseline_results.csv` 和 `operator_results_v2.csv` 容易被覆盖。建议后续每次运行都生成独立目录：
+
+```text
+/home/l/benchmarks/runs/2026-05-07_1534_rocm72_ort1232/
+  metadata.json
+  baseline_results.csv
+  operator_results.csv
+  ort_profiles/
+  summary.md
+```
+
+`metadata.json` 建议记录：
+
+```text
+测试时间
+GPU / 芯片型号
+Windows driver 版本
+WSL Ubuntu 版本
+ROCm 版本
+PyTorch 版本
+ONNX Runtime 版本
+MIGraphX 版本
+Python 版本
+运行命令
+warmup / iters / repeat
+batch size
+shape profile
+chain_len
+```
+
+### 13.5 当前流程的已知问题
+
+```text
+1. ONNX Runtime 的 gpu_mem_mb 目前为空
+   因为 ORT/MIGraphX 不经过 PyTorch allocator，需要额外 telemetry。
+
+2. tflops 对轻量算子没有明显意义
+   add/relu/pool/norm 应重点看 latency、p95、bandwidth、fusion 和 launch overhead。
+
+3. chain_len 必须按算子理解
+   pool 和 embedding 当前不能简单串联 10 次，因此分析 CSV 时要同时看 chain_len。
+
+4. provider 不能只看 session provider 列表
+   必须检查 ORT profile JSON 中 Node 事件的 provider 字段。
+
+5. session_create_ms / session_init_ms 不等于稳态推理延迟
+   MIGraphX 编译初始化开销需要单独分析。
+
+6. WSL2 结果适合开发验证，但不能完全代表最终嵌入式板端
+   最终仍需要裸机 Linux 或目标系统复测。
+
+7. 当前模型级 metric 还不是严格精度评估
+   后续应增加真实 accuracy / F1 或输出误差对比。
+```
+
+### 13.6 后续最值得补齐的能力
+
+优先级建议：
+
+```text
+P0:
+自动创建 run 目录，避免覆盖旧结果。
+
+P1:
+自动生成 metadata.json，保证每轮结果可追溯。
+
+P2:
+自动扫描 profile JSON，列出 CPU fallback 和最慢 Node。
+
+P3:
+增加正确性校验，记录 max_abs_error / max_rel_error。
+
+P4:
+增加模型子图 benchmark，例如 Conv+BN+ReLU、Attention block、MLP block。
+
+P5:
+接入功耗、温度、频率、显存、带宽等 telemetry。
+```
