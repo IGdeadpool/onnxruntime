@@ -445,6 +445,59 @@ def write_text_output(path: Path, text: str) -> Path:
     return path
 
 
+def strip_json_comments(text: str) -> str:
+    result: list[str] = []
+    i = 0
+    in_string = False
+    escape = False
+    while i < len(text):
+        char = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if in_string:
+            result.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            i += 1
+            continue
+        if char == '"':
+            in_string = True
+            result.append(char)
+            i += 1
+            continue
+        if char == "/" and nxt == "/":
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                i += 1
+            continue
+        if char == "/" and nxt == "*":
+            i += 2
+            while i + 1 < len(text) and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        result.append(char)
+        i += 1
+    return "".join(result)
+
+
+def unique_run_dir(runs_dir: Path, run_id: str) -> tuple[str, Path]:
+    base = run_id.strip() or now_label()
+    candidate = runs_dir / base
+    if not candidate.exists():
+        return base, candidate
+    idx = 2
+    while True:
+        next_id = f"{base}_{idx}"
+        candidate = runs_dir / next_id
+        if not candidate.exists():
+            return next_id, candidate
+        idx += 1
+
+
 def compare_operator(current_csv: Path, previous_csv: Path, output_csv: Path, threshold: float) -> list[dict[str, object]]:
     current = read_csv(current_csv)
     previous = read_csv(previous_csv)
@@ -649,7 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_config(path: Path) -> dict[str, object]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_text(encoding="utf-8")
+    data = json.loads(strip_json_comments(raw))
     if not isinstance(data, dict):
         raise ValueError("Config file must contain a JSON object.")
     return data
@@ -665,6 +719,8 @@ def merge_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
     path_keys = {"benchmark_root", "script_dir", "runs_dir", "compare_run"}
 
     for key, value in config.items():
+        if key.startswith("_"):
+            continue
         if not hasattr(args, key):
             raise ValueError(f"Unknown config key: {key}")
         current = getattr(args, key)
@@ -679,17 +735,13 @@ def merge_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
             else:
                 merged[key] = value
 
-    if merged.get("run_id") == defaults["run_id"]:
-        run_id = config.get("run_id")
-        merged["run_id"] = str(run_id) if run_id else now_label()
-
     return argparse.Namespace(**merged)
 
 
 def main() -> int:
     parser = build_parser()
     args = merge_config(parser.parse_args(), parser)
-    run_dir = args.runs_dir / args.run_id
+    args.run_id, run_dir = unique_run_dir(args.runs_dir, str(args.run_id or ""))
     ensure_dir(run_dir)
     ensure_dir(run_dir / "logs")
     write_json(run_dir / "00_run_config.json", vars(args))

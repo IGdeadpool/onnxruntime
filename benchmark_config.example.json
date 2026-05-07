@@ -1,4 +1,5 @@
 {
+  "_note": "推荐使用 benchmark_config.example.jsonc，它包含注释。run_full_benchmark.py 同时支持 .json 和 .jsonc。",
   "benchmark_root": "/home/l/benchmarks",
   "script_dir": "/home/l/benchmarks/scripts",
   "runs_dir": "/home/l/benchmarks/runs",
@@ -9,14 +10,12 @@
   "skip_operator": false,
   "compare_run": "",
   "regression_threshold_pct": 10.0,
-
   "baseline_models": "all",
   "baseline_backends": "all",
   "resnet_batches": "1,8,16,32,64",
   "bert_batches": "1,4,8,16,32",
   "baseline_warmup": 10,
   "baseline_iters": 50,
-
   "operator_backends": "all",
   "operator_batches": "1,8,16",
   "seq_len": 128,

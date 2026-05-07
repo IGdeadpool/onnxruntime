@@ -1,0 +1,51 @@
+{
+  // WSL 中 benchmark 的根目录。所有模型、数据、输出和 runs 默认都放在这里。
+  "benchmark_root": "/home/l/benchmarks",
+
+  // benchmark 脚本目录。run_full_benchmark.py 会从这里调用 baseline/operator 脚本。
+  "script_dir": "/home/l/benchmarks/scripts",
+
+  // 每次完整运行都会在 runs_dir 下创建一个独立目录。
+  "runs_dir": "/home/l/benchmarks/runs",
+
+  // 运行目录名。
+  // 留空时自动使用当前时间戳，例如 2026-05-07_16-45-00。
+  // 如果目录已存在，脚本会自动追加 _2、_3，避免覆盖上次结果。
+  "run_id": "",
+
+  // WSL 内的 Python 解释器，建议使用已经安装 ROCm/PyTorch/ORT 的虚拟环境。
+  "python": "/home/l/torch-rocm/.venv/bin/python",
+
+  // 某一步失败后是否继续执行后续汇总步骤。
+  // false：失败即停止；true：记录错误后继续生成已有结果的 summary。
+  "continue_on_error": false,
+
+  // 调试开关。完整测试时两个都应为 false。
+  "skip_baseline": false,
+  "skip_operator": false,
+
+  // 历史 run 目录或历史 operator_results.csv。
+  // 留空时跳过 regression_report.csv，仅生成 regression_skipped.txt。
+  "compare_run": "",
+
+  // 与 compare_run 对比时，延迟上升超过该百分比标记为 regression。
+  "regression_threshold_pct": 10.0,
+
+  // 模型级 benchmark 配置。
+  "baseline_models": "all",
+  "baseline_backends": "all",
+  "resnet_batches": "1,8,16,32,64",
+  "bert_batches": "1,4,8,16,32",
+  "baseline_warmup": 10,
+  "baseline_iters": 50,
+
+  // 算子级 benchmark 配置。
+  "operator_backends": "all",
+  "operator_batches": "1,8,16",
+  "seq_len": 128,
+  "shape_profile": "large",
+  "chain_len": 10,
+  "repeat": 3,
+  "operator_warmup": 10,
+  "operator_iters": 50
+}

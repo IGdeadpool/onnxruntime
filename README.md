@@ -66,16 +66,16 @@ ORT profiling JSON 输出目录：
 
 `run_full_benchmark.py` 会从配置文件读取参数，创建独立 run 目录，并为每一步生成对应输出。
 
-先复制一份本地配置：
+先复制一份本地配置。推荐使用 `.jsonc`，里面有注释：
 
 ```bash
-cp ~/benchmarks/scripts/benchmark_config.example.json ~/benchmarks/scripts/benchmark_config.local.json
+cp ~/benchmarks/scripts/benchmark_config.example.jsonc ~/benchmarks/scripts/benchmark_config.local.jsonc
 ```
 
 按需修改：
 
 ```bash
-vim ~/benchmarks/scripts/benchmark_config.local.json
+vim ~/benchmarks/scripts/benchmark_config.local.jsonc
 ```
 
 ```bash
@@ -83,14 +83,14 @@ cd ~/benchmarks
 source ~/torch-rocm/.venv/bin/activate
 
 python ~/benchmarks/scripts/run_full_benchmark.py \
-  --config ~/benchmarks/scripts/benchmark_config.local.json
+  --config ~/benchmarks/scripts/benchmark_config.local.jsonc
 ```
 
 命令行参数可以临时覆盖配置文件，例如只跑算子级 benchmark：
 
 ```bash
 python ~/benchmarks/scripts/run_full_benchmark.py \
-  --config ~/benchmarks/scripts/benchmark_config.local.json \
+  --config ~/benchmarks/scripts/benchmark_config.local.jsonc \
   --skip-baseline
 ```
 
@@ -117,6 +117,8 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
 ```
 
 其中 `steps_status.md` 是面向开发者阅读的步骤状态表，包含每一步状态、耗时、输出文件和失败原因。
+
+`run_id` 留空时会自动使用时间戳目录；如果目录已存在，会自动追加 `_2`、`_3`，不会覆盖上次结果。
 
 ## ORT Profile 可视化
 
