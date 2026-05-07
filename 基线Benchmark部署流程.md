@@ -659,6 +659,26 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
   --config ~/benchmarks/scripts/benchmark_config.local.jsonc
 ```
 
+运行开始后，终端会实时输出当前步骤：
+
+```text
+[RUN] run_id=...
+[RUN] run_dir=/home/l/benchmarks/runs/...
+[RUN] steps_status=/home/l/benchmarks/runs/.../steps_status.md
+[START] 01_environment
+[OK] 01_environment finished ...
+[START] 02_baseline
+...
+```
+
+说明：
+
+```text
+终端会实时显示每一步开始和结束状态。
+benchmark_baselines.py / operator_benchmark.py 的输出会同时显示在终端，并写入 logs/*.log。
+如果长时间没有新输出，可以打开 steps_status.md 或 tail 对应 log 文件确认进度。
+```
+
 临时覆盖配置示例：
 
 ```bash
@@ -723,6 +743,33 @@ regression_report.csv:
 summary.md:
 本轮 benchmark 的最终人类可读报告。
 ```
+
+实时查看进度：
+
+```bash
+# 查看步骤状态
+cat /home/l/benchmarks/runs/<run_id>/steps_status.md
+
+# 查看 baseline 日志
+tail -f /home/l/benchmarks/runs/<run_id>/logs/02_baseline.log
+
+# 查看 operator 日志
+tail -f /home/l/benchmarks/runs/<run_id>/logs/03_operator.log
+```
+
+检查是否仍在运行：
+
+```bash
+ps -ef | grep -E 'run_full_benchmark|benchmark_baselines|operator_benchmark' | grep -v grep
+```
+
+如果中断了终端但进程仍在后台运行，应先确认是否需要保留本轮测试。若确认要停止：
+
+```bash
+kill <pid>
+```
+
+不要直接删除正在写入的 run 目录。
 
 ### 13.4 导入 ORT profile 可视化工具
 
