@@ -94,6 +94,9 @@ class StepRunner:
         self.status: list[dict[str, object]] = []
         ensure_dir(self.logs_dir)
 
+    def console(self, message: str) -> None:
+        print(message, flush=True)
+
     def write_status_md(self) -> None:
         lines = [
             "# Benchmark Step Status",
@@ -148,13 +151,38 @@ class StepRunner:
         }
         self.status.append(item)
         self.write_status_md()
+        output_text = ", ".join(str(p) for p in outputs or [])
+        if status == "ok":
+            self.console(f"[OK] {step} finished in {item['duration_sec']} sec")
+        elif status == "skipped":
+            self.console(f"[SKIP] {step}: {error or output_text}")
+        else:
+            self.console(f"[ERROR] {step}: {error}")
+        if output_text:
+            self.console(f"       outputs: {output_text}")
 
     def command(self, step: str, command: list[str], outputs: list[Path]) -> bool:
         start = time.time()
         log_path = self.logs_dir / f"{step}.log"
+        self.console(f"[START] {step}")
+        self.console(f"        command: {' '.join(command)}")
+        self.console(f"        log: {log_path}")
         with log_path.open("w", encoding="utf-8") as log:
             log.write("$ " + " ".join(command) + "\n\n")
-            proc = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True)
+            log.flush()
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                log.write(line)
+                log.flush()
+                print(line, end="", flush=True)
+            proc.wait()
         all_outputs = [log_path] + outputs
         if proc.returncode == 0:
             self.record(step, "ok", start, all_outputs, command=command)
@@ -747,8 +775,12 @@ def main() -> int:
     write_json(run_dir / "00_run_config.json", vars(args))
 
     runner = StepRunner(run_dir, args.continue_on_error)
+    runner.console(f"[RUN] run_id={args.run_id}")
+    runner.console(f"[RUN] run_dir={run_dir}")
+    runner.console(f"[RUN] steps_status={run_dir / 'steps_status.md'}")
 
     start = time.time()
+    runner.console("[START] 01_environment")
     try:
         env_outputs = collect_environment(run_dir, args)
         runner.record("01_environment", "ok", start, env_outputs)
@@ -824,6 +856,7 @@ def main() -> int:
 
     profile_dir = run_dir / "ort_profiles"
     source_profile_dir = args.benchmark_root / "outputs" / "ort_profiles"
+    runner.console("[START] 04_collect_profiles")
     copied_profiles = copy_new_profiles(source_profile_dir, profile_dir, profile_copy_start)
     collect_summary = write_profile_collect_summary(
         run_dir / "profile_collect_summary.txt",
@@ -836,11 +869,13 @@ def main() -> int:
     profile_summary_csv = run_dir / "profile_summary.csv"
     profile_summary_json = run_dir / "profile_summary.json"
     start = time.time()
+    runner.console("[START] 05_profile_summary")
     profile_rows = summarize_profiles(profile_dir, profile_summary_csv, profile_summary_json)
     runner.record("05_profile_summary", "ok", start, [profile_summary_csv, profile_summary_json])
 
     operator_pair_csv = run_dir / "operator_pair_summary.csv"
     start = time.time()
+    runner.console("[START] 06_operator_summary")
     operator_summary = summarize_operator(operator_csv, operator_pair_csv)
     runner.record("06_operator_summary", "ok", start, [operator_pair_csv])
 
@@ -851,6 +886,7 @@ def main() -> int:
         if args.compare_run.is_dir():
             previous_csv = args.compare_run / "operator_results.csv"
         start = time.time()
+        runner.console("[START] 07_regression_report")
         regression_rows = compare_operator(operator_csv, previous_csv, regression_csv, args.regression_threshold_pct)
         runner.record("07_regression_report", "ok", start, [regression_csv])
     else:
@@ -858,6 +894,7 @@ def main() -> int:
         runner.record("07_regression_report", "skipped", time.time(), [skipped], error="--compare-run not provided")
 
     start = time.time()
+    runner.console("[START] 08_summary")
     summary_path = write_summary(
         run_dir,
         args,
