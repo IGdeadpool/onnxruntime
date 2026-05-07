@@ -120,6 +120,15 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
 
 `run_id` 留空时会自动使用时间戳目录；如果目录已存在，会自动追加 `_2`、`_3`，不会覆盖上次结果。
 
+重新生成已有 run 的汇总，不重跑 benchmark：
+
+```bash
+python ~/benchmarks/scripts/run_full_benchmark.py \
+  --summarize-run /home/l/benchmarks/runs/<run_id>
+```
+
+`operator_pair_summary.csv` 按 `op_name + batch_size + shape_profile` 配对 Torch ROCm 与 ONNX Runtime，并使用 `latency_per_op_mean_ms` 比较。新版算子脚本会让 Torch 与 ONNX 使用同一套有效 chain：可链式算子使用配置里的 `chain_len`，pool 和 embedding 使用 `effective_chain=1`。
+
 ## ORT Profile 可视化
 
 Windows 打开：

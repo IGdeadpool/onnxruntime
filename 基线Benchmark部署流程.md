@@ -744,6 +744,59 @@ summary.md:
 本轮 benchmark 的最终人类可读报告。
 ```
 
+`operator_results.csv` 的 chain 规则：
+
+```text
+Torch ROCm 和 ONNX Runtime 使用同一套有效 chain_len。
+
+可安全链式的算子：
+relu / add / gelu / softmax / batch_matmul / conv2d / batchnorm2d / linear / layernorm
+两边都使用配置中的 chain_len，例如 10。
+
+不适合简单链式的算子：
+maxpool2d / avgpool2d / embedding
+两边都使用 effective_chain=1，并在 attributes 中标注 effective_chain=1。
+```
+
+原因：
+
+```text
+pool 连续串联会改变空间尺寸，不再代表同一个算子 shape。
+embedding 输入是 token id，输出是 fp32 embedding，不能直接把输出再送入同一个 embedding。
+```
+
+`operator_pair_summary.csv` 配对规则：
+
+```text
+按 op_name + batch_size + shape_profile 配对 Torch ROCm 与 ONNX Runtime。
+正常情况下，torch_chain_len 和 ort_chain_len 应一致。
+比较字段使用 latency_per_op_mean_ms，避免 ONNX chain_len=10 的总耗时直接和 Torch 单算子总耗时比较。
+```
+
+如果看到 `torch_chain_len=1` 但 `ort_chain_len=10`：
+
+```text
+说明该结果来自旧版 operator_benchmark.py。
+旧版只给 ONNX Runtime 使用 chain_len，Torch 仍按单算子跑。
+该结果不建议作为长期自动化对比基线，应使用新版脚本重新运行。
+```
+
+如果 `operator_pair_summary.csv` 只有表头，通常说明：
+
+```text
+operator_results.csv 没有成功生成
+03_operator 步骤失败或被跳过
+operator_results.csv 中缺少 torch_rocm 或 onnxruntime 其中一个 backend
+同一 op + batch + shape 下没有同时成功的 Torch 与 ONNX 行
+```
+
+已有 run 目录不需要重跑 benchmark，也可以重新生成汇总：
+
+```bash
+python ~/benchmarks/scripts/run_full_benchmark.py \
+  --summarize-run /home/l/benchmarks/runs/<run_id>
+```
+
 实时查看进度：
 
 ```bash

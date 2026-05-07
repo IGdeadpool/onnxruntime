@@ -411,7 +411,7 @@ def summarize_profiles(profile_dir: Path, output_csv: Path, output_json: Path) -
 
 def operator_pairs(operator_csv: Path) -> list[dict[str, object]]:
     rows = read_csv(operator_csv)
-    grouped: dict[tuple[str, str, str, str], dict[str, dict[str, str]]] = defaultdict(dict)
+    grouped: dict[tuple[str, str, str], dict[str, list[dict[str, str]]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         if row.get("status") != "ok":
             continue
@@ -419,31 +419,44 @@ def operator_pairs(operator_csv: Path) -> list[dict[str, object]]:
             row.get("op_name", ""),
             row.get("batch_size", ""),
             row.get("shape_profile", ""),
-            row.get("chain_len", ""),
         )
-        grouped[key][row.get("backend", "")] = row
+        grouped[key][row.get("backend", "")].append(row)
 
     out: list[dict[str, object]] = []
-    for key in sorted(grouped, key=lambda x: (x[0], int(x[1] or 0), x[2], int(x[3] or 0))):
+    for key in sorted(grouped, key=lambda x: (x[0], int(x[1] or 0), x[2])):
         item = grouped[key]
-        torch_row = item.get("torch_rocm")
-        ort_row = item.get("onnxruntime")
-        if not torch_row or not ort_row:
+        torch_rows = item.get("torch_rocm", [])
+        ort_rows = item.get("onnxruntime", [])
+        if not torch_rows or not ort_rows:
             continue
-        torch_ms = to_float(torch_row.get("latency_per_op_mean_ms"), to_float(torch_row.get("latency_mean_ms")))
-        ort_ms = to_float(ort_row.get("latency_per_op_mean_ms"), to_float(ort_row.get("latency_mean_ms")))
+
+        torch_values = [
+            to_float(row.get("latency_per_op_mean_ms"), to_float(row.get("latency_mean_ms")))
+            for row in torch_rows
+        ]
+        ort_values = [
+            to_float(row.get("latency_per_op_mean_ms"), to_float(row.get("latency_mean_ms")))
+            for row in ort_rows
+        ]
+        torch_ms = mean([v for v in torch_values if v > 0]) if any(v > 0 for v in torch_values) else 0.0
+        ort_ms = mean([v for v in ort_values if v > 0]) if any(v > 0 for v in ort_values) else 0.0
+        torch_chain_lens = sorted({row.get("chain_len", "") for row in torch_rows})
+        ort_chain_lens = sorted({row.get("chain_len", "") for row in ort_rows})
         out.append({
             "op_name": key[0],
             "batch_size": key[1],
             "shape_profile": key[2],
-            "chain_len": key[3],
+            "torch_chain_len": ";".join(torch_chain_lens),
+            "ort_chain_len": ";".join(ort_chain_lens),
+            "torch_sample_count": len(torch_rows),
+            "ort_sample_count": len(ort_rows),
             "torch_per_op_mean_ms": round(torch_ms, 6),
             "ort_per_op_mean_ms": round(ort_ms, 6),
             "ort_div_torch": round(ort_ms / torch_ms, 6) if torch_ms else 0.0,
-            "torch_p95_ms": torch_row.get("latency_p95_ms", ""),
-            "ort_p95_ms": ort_row.get("latency_p95_ms", ""),
-            "provider": ort_row.get("provider", ""),
-            "profile_path": ort_row.get("profile_path", ""),
+            "torch_p95_ms": round(mean([to_float(row.get("latency_p95_ms")) for row in torch_rows]), 6),
+            "ort_p95_ms": round(mean([to_float(row.get("latency_p95_ms")) for row in ort_rows]), 6),
+            "provider": ort_rows[-1].get("provider", ""),
+            "profile_path": ort_rows[-1].get("profile_path", ""),
         })
     return out
 
@@ -453,7 +466,10 @@ def summarize_operator(operator_csv: Path, output_csv: Path) -> list[dict[str, o
         "op_name",
         "batch_size",
         "shape_profile",
-        "chain_len",
+        "torch_chain_len",
+        "ort_chain_len",
+        "torch_sample_count",
+        "ort_sample_count",
         "torch_per_op_mean_ms",
         "ort_per_op_mean_ms",
         "ort_div_torch",
@@ -659,9 +675,11 @@ def write_summary(
         "| op | batch | chain | ORT/Torch | torch_ms | ort_ms |",
         "|---|---:|---:|---:|---:|---:|",
     ]
+    if not best_ort:
+        lines.append("| no paired rows |  |  |  |  |  |")
     for row in best_ort:
         lines.append(
-            f"| {row.get('op_name','')} | {row.get('batch_size','')} | {row.get('chain_len','')} | "
+            f"| {row.get('op_name','')} | {row.get('batch_size','')} | {row.get('torch_chain_len','')}/{row.get('ort_chain_len','')} | "
             f"{row.get('ort_div_torch','')} | {row.get('torch_per_op_mean_ms','')} | {row.get('ort_per_op_mean_ms','')} |"
         )
 
@@ -672,9 +690,13 @@ def write_summary(
         "| op | batch | chain | ORT/Torch | torch_ms | ort_ms |",
         "|---|---:|---:|---:|---:|---:|",
     ]
+    if not worst_ort:
+        lines.append("| no paired rows |  |  |  |  |  |")
+        lines.append("")
+        lines.append("No paired rows means `operator_results.csv` did not contain matching successful Torch and ONNX Runtime rows for the same op/batch/shape.")
     for row in worst_ort:
         lines.append(
-            f"| {row.get('op_name','')} | {row.get('batch_size','')} | {row.get('chain_len','')} | "
+            f"| {row.get('op_name','')} | {row.get('batch_size','')} | {row.get('torch_chain_len','')}/{row.get('ort_chain_len','')} | "
             f"{row.get('ort_div_torch','')} | {row.get('torch_per_op_mean_ms','')} | {row.get('ort_per_op_mean_ms','')} |"
         )
 
@@ -700,6 +722,7 @@ def write_summary(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run full benchmark workflow with per-step outputs.")
     parser.add_argument("--config", type=Path, default=None, help="Benchmark workflow config JSON file.")
+    parser.add_argument("--summarize-run", type=Path, default=None, help="Only regenerate summaries for an existing run directory.")
     parser.add_argument("--benchmark-root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--script-dir", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS)
@@ -727,6 +750,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--operator-warmup", type=int, default=10)
     parser.add_argument("--operator-iters", type=int, default=50)
     return parser
+
+
+def summarize_existing_run(run_dir: Path) -> int:
+    baseline_csv = run_dir / "baseline_results.csv"
+    operator_csv = run_dir / "operator_results.csv"
+    profile_dir = run_dir / "ort_profiles"
+    profile_summary_csv = run_dir / "profile_summary.csv"
+    profile_summary_json = run_dir / "profile_summary.json"
+    operator_pair_csv = run_dir / "operator_pair_summary.csv"
+
+    print(f"[SUMMARY] run_dir={run_dir}", flush=True)
+    print("[START] profile_summary", flush=True)
+    profile_rows = summarize_profiles(profile_dir, profile_summary_csv, profile_summary_json)
+    print(f"[OK] profile_summary rows={len(profile_rows)} output={profile_summary_csv}", flush=True)
+
+    print("[START] operator_pair_summary", flush=True)
+    operator_rows = summarize_operator(operator_csv, operator_pair_csv)
+    print(f"[OK] operator_pair_summary rows={len(operator_rows)} output={operator_pair_csv}", flush=True)
+
+    args = argparse.Namespace(run_id=run_dir.name)
+    summary_path = write_summary(run_dir, args, [], baseline_csv, operator_csv, operator_rows, profile_rows, [])
+    print(f"[OK] summary output={summary_path}", flush=True)
+    return 0
 
 
 def load_config(path: Path) -> dict[str, object]:
@@ -769,6 +815,8 @@ def merge_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> a
 def main() -> int:
     parser = build_parser()
     args = merge_config(parser.parse_args(), parser)
+    if args.summarize_run:
+        return summarize_existing_run(args.summarize_run)
     args.run_id, run_dir = unique_run_dir(args.runs_dir, str(args.run_id or ""))
     ensure_dir(run_dir)
     ensure_dir(run_dir / "logs")

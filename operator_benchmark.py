@@ -479,6 +479,230 @@ def torch_transformer_ops(batch: int, seq_len: int, warmup: int, iters: int, rep
     return rows
 
 
+def torch_basic_ops(
+    batch: int,
+    seq_len: int,
+    warmup: int,
+    iters: int,
+    repeat_id: int,
+    shape_profile: str,
+    chain_len: int,
+) -> list[dict[str, object]]:
+    dev = device()
+    rows = []
+    specs: list[tuple[str, nn.Module, tuple[torch.Tensor, ...], str, str, float, float, int]] = []
+
+    elem_shape = (batch, 512, 112, 112) if shape_profile == "large" else (batch, 64, 56, 56)
+    x4 = torch.randn(*elem_shape, device=dev)
+    specs.append(
+        (
+            "relu",
+            ChainModule(nn.ReLU().eval(), chain_len).eval().to(dev),
+            (x4,),
+            "nchw",
+            f"shape={elem_shape}",
+            0.0,
+            tensor_bytes(tuple(x4.shape), tuple(x4.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
+    add_shape = (batch, 512, 112, 112) if shape_profile == "large" else (batch, 256, 56, 56)
+    a4 = torch.randn(*add_shape, device=dev)
+    b4 = torch.randn(*add_shape, device=dev)
+    specs.append(
+        (
+            "add",
+            AddChainModule(chain_len).eval().to(dev),
+            (a4, b4),
+            "nchw",
+            f"shape={add_shape}",
+            0.0,
+            tensor_bytes(tuple(a4.shape), tuple(b4.shape), tuple(a4.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
+    hidden = 1024 if shape_profile == "large" else 768
+    gelu_x = torch.randn(batch, seq_len, hidden, device=dev)
+    specs.append(
+        (
+            "gelu",
+            ChainModule(GeluModule().eval(), chain_len).eval().to(dev),
+            (gelu_x,),
+            "bsh",
+            f"shape=(N,{seq_len},{hidden})",
+            0.0,
+            tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len,
+            chain_len,
+        )
+    )
+    specs.append(
+        (
+            "softmax",
+            ChainModule(SoftmaxModule().eval(), chain_len).eval().to(dev),
+            (gelu_x,),
+            "bsh",
+            f"shape=(N,{seq_len},{hidden});dim=-1",
+            0.0,
+            tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
+    m, k, n = (256, 1024, 1024) if shape_profile == "large" else (seq_len, 768, 768)
+    mm_a = torch.randn(batch, m, k, device=dev)
+    mm_b = torch.randn(batch, k, n, device=dev)
+    specs.append(
+        (
+            "batch_matmul",
+            MatMulChainModule(chain_len).eval().to(dev),
+            (mm_a, mm_b),
+            "bmn_bnk",
+            f"m={m};k={k};n={n}",
+            2.0 * batch * m * k * n * chain_len,
+            tensor_bytes(tuple(mm_a.shape), tuple(mm_b.shape), (batch, m, n)) * chain_len,
+            chain_len,
+        )
+    )
+
+    cin, cout, h, w, ksize, stride, pad = (
+        (256, 256, 56, 56, 3, 1, 1)
+        if shape_profile == "large"
+        else (64, 64, 56, 56, 3, 1, 1)
+    )
+    conv = ChainModule(nn.Conv2d(cin, cout, kernel_size=ksize, stride=stride, padding=pad, bias=False).eval(), chain_len).eval().to(dev)
+    conv_x = torch.randn(batch, cin, h, w, device=dev)
+    conv_y = conv(conv_x)
+    specs.append(
+        (
+            "conv2d",
+            conv,
+            (conv_x,),
+            "nchw",
+            f"cin={cin};cout={cout};k={ksize};stride={stride};pad={pad}",
+            2.0 * batch * cout * int(conv_y.shape[2]) * int(conv_y.shape[3]) * cin * ksize * ksize * chain_len,
+            tensor_bytes(tuple(conv_x.shape), tuple(conv_y.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
+    bn_channels = 128 if shape_profile == "large" else 64
+    bn_hw = 112 if shape_profile == "large" else 56
+    bn = ChainModule(nn.BatchNorm2d(bn_channels).eval(), chain_len).eval().to(dev)
+    bn_x = torch.randn(batch, bn_channels, bn_hw, bn_hw, device=dev)
+    specs.append(
+        (
+            "batchnorm2d",
+            bn,
+            (bn_x,),
+            "nchw",
+            f"channels={bn_channels}",
+            0.0,
+            tensor_bytes(tuple(bn_x.shape), tuple(bn_x.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
+    pool_x = torch.randn(batch, bn_channels, bn_hw, bn_hw, device=dev)
+    specs.append(
+        (
+            "maxpool2d",
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1).eval().to(dev),
+            (pool_x,),
+            "nchw",
+            "k=3;stride=2;pad=1;effective_chain=1",
+            0.0,
+            tensor_bytes(tuple(pool_x.shape), (batch, bn_channels, bn_hw // 2, bn_hw // 2)),
+            1,
+        )
+    )
+    avg_x = torch.randn(batch, bn_channels, bn_hw, bn_hw, device=dev)
+    specs.append(
+        (
+            "avgpool2d",
+            nn.AvgPool2d(kernel_size=7, stride=1).eval().to(dev),
+            (avg_x,),
+            "nchw",
+            "k=7;stride=1;effective_chain=1",
+            0.0,
+            tensor_bytes(tuple(avg_x.shape), (batch, bn_channels, bn_hw - 6, bn_hw - 6)),
+            1,
+        )
+    )
+
+    in_features, out_features = (4096, 4096) if shape_profile == "large" else (2048, 2048)
+    linear = ChainModule(nn.Linear(in_features, out_features, bias=True).eval(), chain_len).eval().to(dev)
+    linear_x = torch.randn(batch, in_features, device=dev)
+    specs.append(
+        (
+            "linear",
+            linear,
+            (linear_x,),
+            "nc",
+            f"in={in_features};out={out_features};bias=true",
+            2.0 * batch * in_features * out_features * chain_len,
+            tensor_bytes(tuple(linear_x.shape), (batch, out_features)) * chain_len,
+            chain_len,
+        )
+    )
+
+    layernorm = ChainModule(nn.LayerNorm(hidden).eval(), chain_len).eval().to(dev)
+    ln_x = torch.randn(batch, seq_len, hidden, device=dev)
+    specs.append(
+        (
+            "layernorm",
+            layernorm,
+            (ln_x,),
+            "bsh",
+            f"hidden={hidden}",
+            0.0,
+            tensor_bytes(tuple(ln_x.shape), tuple(ln_x.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
+    emb = EmbeddingModule().eval().to(dev)
+    ids = torch.randint(0, 30522, (batch, seq_len), dtype=torch.long, device=dev)
+    specs.append(
+        (
+            "embedding",
+            emb,
+            (ids,),
+            "bs",
+            "vocab=30522;hidden=768;effective_chain=1",
+            0.0,
+            tensor_bytes(tuple(ids.shape), (batch, seq_len, 768)),
+            1,
+        )
+    )
+
+    for name, module, inputs, layout, attrs, flops, bytes_moved, effective_chain_len in specs:
+        y = module(*inputs)
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        stats = bench(lambda module=module, inputs=inputs: module(*inputs), warmup, iters)
+        rows.append(
+            row(
+                op_name=name,
+                backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+                dtype="int64/fp32" if any(t.dtype == torch.long for t in inputs) else "fp32",
+                layout=layout,
+                input_shape=";".join(str(tuple(t.shape)) for t in inputs),
+                output_shape=str(tuple(y.shape)),
+                attributes=attrs,
+                batch_size=batch,
+                repeat_id=repeat_id,
+                shape_profile=shape_profile,
+                chain_len=effective_chain_len,
+                stats=stats,
+                flops=flops,
+                bytes_moved=bytes_moved,
+            )
+        )
+    return rows
+
+
 def onnx_basic_ops(
     batch: int,
     seq_len: int,
@@ -489,21 +713,21 @@ def onnx_basic_ops(
     chain_len: int,
 ) -> list[dict[str, object]]:
     rows = []
-    specs: list[tuple[str, nn.Module, tuple[torch.Tensor, ...], list[str], str, str, float, float]] = []
+    specs: list[tuple[str, nn.Module, tuple[torch.Tensor, ...], list[str], str, str, float, float, int]] = []
 
     elem_shape = (batch, 512, 112, 112) if shape_profile == "large" else (batch, 64, 56, 56)
     x4 = torch.randn(*elem_shape)
-    specs.append(("relu", ChainModule(nn.ReLU().eval(), chain_len).eval(), (x4,), ["input"], "nchw", f"shape={elem_shape}", 0.0, tensor_bytes(tuple(x4.shape), tuple(x4.shape)) * chain_len))
+    specs.append(("relu", ChainModule(nn.ReLU().eval(), chain_len).eval(), (x4,), ["input"], "nchw", f"shape={elem_shape}", 0.0, tensor_bytes(tuple(x4.shape), tuple(x4.shape)) * chain_len, chain_len))
 
     add_shape = (batch, 512, 112, 112) if shape_profile == "large" else (batch, 256, 56, 56)
     a4 = torch.randn(*add_shape)
     b4 = torch.randn(*add_shape)
-    specs.append(("add", AddChainModule(chain_len).eval(), (a4, b4), ["x", "y"], "nchw", f"shape={add_shape}", 0.0, tensor_bytes(tuple(a4.shape), tuple(b4.shape), tuple(a4.shape)) * chain_len))
+    specs.append(("add", AddChainModule(chain_len).eval(), (a4, b4), ["x", "y"], "nchw", f"shape={add_shape}", 0.0, tensor_bytes(tuple(a4.shape), tuple(b4.shape), tuple(a4.shape)) * chain_len, chain_len))
 
     hidden = 1024 if shape_profile == "large" else 768
     gelu_x = torch.randn(batch, seq_len, hidden)
-    specs.append(("gelu", ChainModule(GeluModule().eval(), chain_len).eval(), (gelu_x,), ["input"], "bsh", f"shape=(N,{seq_len},{hidden})", 0.0, tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len))
-    specs.append(("softmax", ChainModule(SoftmaxModule().eval(), chain_len).eval(), (gelu_x,), ["input"], "bsh", f"shape=(N,{seq_len},{hidden});dim=-1", 0.0, tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len))
+    specs.append(("gelu", ChainModule(GeluModule().eval(), chain_len).eval(), (gelu_x,), ["input"], "bsh", f"shape=(N,{seq_len},{hidden})", 0.0, tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len, chain_len))
+    specs.append(("softmax", ChainModule(SoftmaxModule().eval(), chain_len).eval(), (gelu_x,), ["input"], "bsh", f"shape=(N,{seq_len},{hidden});dim=-1", 0.0, tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len, chain_len))
 
     m, k, n = (256, 1024, 1024) if shape_profile == "large" else (seq_len, 768, 768)
     mm_a = torch.randn(batch, m, k)
@@ -518,6 +742,7 @@ def onnx_basic_ops(
             f"m={m};k={k};n={n}",
             2.0 * batch * m * k * n * chain_len,
             tensor_bytes(tuple(mm_a.shape), tuple(mm_b.shape), (batch, m, n)) * chain_len,
+            chain_len,
         )
     )
 
@@ -543,6 +768,7 @@ def onnx_basic_ops(
             f"cin={cin};cout={cout};k={ksize};stride={stride};pad={pad}",
             2.0 * batch * cout * conv_out_h * conv_out_w * cin * ksize * ksize * chain_len,
             tensor_bytes(tuple(conv_x.shape), (batch, cout, conv_out_h, conv_out_w)) * chain_len,
+            chain_len,
         )
     )
 
@@ -550,38 +776,38 @@ def onnx_basic_ops(
     bn_hw = 112 if shape_profile == "large" else 56
     bn = ChainModule(nn.BatchNorm2d(bn_channels).eval(), chain_len).eval()
     bn_x = torch.randn(batch, bn_channels, bn_hw, bn_hw)
-    specs.append(("batchnorm2d", bn, (bn_x,), ["input"], "nchw", f"channels={bn_channels}", 0.0, tensor_bytes(tuple(bn_x.shape), tuple(bn_x.shape)) * chain_len))
+    specs.append(("batchnorm2d", bn, (bn_x,), ["input"], "nchw", f"channels={bn_channels}", 0.0, tensor_bytes(tuple(bn_x.shape), tuple(bn_x.shape)) * chain_len, chain_len))
 
     maxpool = ChainModule(nn.MaxPool2d(kernel_size=3, stride=2, padding=1).eval(), 1).eval()
     pool_x = torch.randn(batch, bn_channels, bn_hw, bn_hw)
-    specs.append(("maxpool2d", maxpool, (pool_x,), ["input"], "nchw", "k=3;stride=2;pad=1", 0.0, tensor_bytes(tuple(pool_x.shape), (batch, bn_channels, bn_hw // 2, bn_hw // 2))))
+    specs.append(("maxpool2d", maxpool, (pool_x,), ["input"], "nchw", "k=3;stride=2;pad=1;effective_chain=1", 0.0, tensor_bytes(tuple(pool_x.shape), (batch, bn_channels, bn_hw // 2, bn_hw // 2)), 1))
 
     avgpool = ChainModule(nn.AvgPool2d(kernel_size=7, stride=1).eval(), 1).eval()
     avg_x = torch.randn(batch, bn_channels, bn_hw, bn_hw)
-    specs.append(("avgpool2d", avgpool, (avg_x,), ["input"], "nchw", "k=7;stride=1", 0.0, tensor_bytes(tuple(avg_x.shape), (batch, bn_channels, bn_hw - 6, bn_hw - 6))))
+    specs.append(("avgpool2d", avgpool, (avg_x,), ["input"], "nchw", "k=7;stride=1;effective_chain=1", 0.0, tensor_bytes(tuple(avg_x.shape), (batch, bn_channels, bn_hw - 6, bn_hw - 6)), 1))
 
     in_features, out_features = (4096, 4096) if shape_profile == "large" else (2048, 2048)
     linear = ChainModule(nn.Linear(in_features, out_features, bias=True).eval(), chain_len).eval()
     linear_x = torch.randn(batch, in_features)
-    specs.append(("linear", linear, (linear_x,), ["input"], "nc", f"in={in_features};out={out_features};bias=true", 2.0 * batch * in_features * out_features * chain_len, tensor_bytes(tuple(linear_x.shape), (batch, out_features)) * chain_len))
+    specs.append(("linear", linear, (linear_x,), ["input"], "nc", f"in={in_features};out={out_features};bias=true", 2.0 * batch * in_features * out_features * chain_len, tensor_bytes(tuple(linear_x.shape), (batch, out_features)) * chain_len, chain_len))
 
     layernorm = ChainModule(nn.LayerNorm(hidden).eval(), chain_len).eval()
     ln_x = torch.randn(batch, seq_len, hidden)
-    specs.append(("layernorm", layernorm, (ln_x,), ["input"], "bsh", f"hidden={hidden}", 0.0, tensor_bytes(tuple(ln_x.shape), tuple(ln_x.shape)) * chain_len))
+    specs.append(("layernorm", layernorm, (ln_x,), ["input"], "bsh", f"hidden={hidden}", 0.0, tensor_bytes(tuple(ln_x.shape), tuple(ln_x.shape)) * chain_len, chain_len))
 
     emb = EmbeddingModule().eval()
     ids = torch.randint(0, 30522, (batch, seq_len), dtype=torch.long)
-    specs.append(("embedding", emb, (ids,), ["input_ids"], "bs", "vocab=30522;hidden=768", 0.0, tensor_bytes(tuple(ids.shape), (batch, seq_len, 768))))
+    specs.append(("embedding", emb, (ids,), ["input_ids"], "bs", "vocab=30522;hidden=768;effective_chain=1", 0.0, tensor_bytes(tuple(ids.shape), (batch, seq_len, 768)), 1))
 
-    for name, module, inputs, input_names, layout, attrs, flops, bytes_moved in specs:
-        path = ONNX_DIR / f"op_{name}_{shape_profile}_chain{chain_len}_bs{batch}_seq{seq_len}.onnx"
+    for name, module, inputs, input_names, layout, attrs, flops, bytes_moved, effective_chain_len in specs:
+        path = ONNX_DIR / f"op_{name}_{shape_profile}_chain{effective_chain_len}_bs{batch}_seq{seq_len}.onnx"
         try:
             export_onnx_once(module, inputs, path, input_names)
             feed = {
                 n: t.numpy().astype(np.int64 if t.dtype == torch.long else np.float32)
                 for n, t in zip(input_names, inputs)
             }
-            profile_name = f"ort_{name}_{shape_profile}_chain{chain_len}_bs{batch}_rep{repeat_id}"
+            profile_name = f"ort_{name}_{shape_profile}_chain{effective_chain_len}_bs{batch}_rep{repeat_id}"
             stats, provider, output_shape, session_create_ms, first_run_ms, profile_path = run_onnx(path, feed, warmup, iters, profile_name)
             graph_ops = onnx_graph_ops(path)
             rows.append(
@@ -598,7 +824,7 @@ def onnx_basic_ops(
                     batch_size=batch,
                     repeat_id=repeat_id,
                     shape_profile=shape_profile,
-                    chain_len=chain_len,
+                    chain_len=effective_chain_len,
                     session_create_ms=session_create_ms,
                     first_run_ms=first_run_ms,
                     profile_path=profile_path,
@@ -621,7 +847,7 @@ def onnx_basic_ops(
                     batch_size=batch,
                     repeat_id=repeat_id,
                     shape_profile=shape_profile,
-                    chain_len=chain_len,
+                    chain_len=effective_chain_len,
                     stats={},
                     status="error",
                     error_message=str(exc).replace("\n", " ")[:500],
@@ -694,11 +920,7 @@ def main() -> None:
         for batch in parse_ints(args.batches):
             if run_torch:
                 print(f"Running torch ops repeat={repeat_id} batch={batch}")
-                rows.extend(torch_conv2d(batch, args.warmup, args.iters, repeat_id, args.shape_profile))
-                rows.extend(torch_pool_norm(batch, args.warmup, args.iters, repeat_id, args.shape_profile))
-                rows.extend(torch_elementwise(batch, args.warmup, args.iters, repeat_id, args.shape_profile))
-                rows.extend(torch_linear_matmul(batch, args.warmup, args.iters, repeat_id, args.shape_profile))
-                rows.extend(torch_transformer_ops(batch, args.seq_len, args.warmup, args.iters, repeat_id, args.shape_profile))
+                rows.extend(torch_basic_ops(batch, args.seq_len, args.warmup, args.iters, repeat_id, args.shape_profile, args.chain_len))
             if run_onnx:
                 print(f"Running onnx ops repeat={repeat_id} batch={batch}")
                 rows.extend(onnx_basic_ops(batch, args.seq_len, args.warmup, args.iters, repeat_id, args.shape_profile, args.chain_len))
