@@ -10,9 +10,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import io
+import sys
+
 from benchmark_runtime import RuntimeConfig, detect_runtime
 
-ROOT = Path("/home/l/benchmarks")
+# Force UTF-8 stdout to handle emoji from torch.onnx/ORT on Windows
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+ROOT = Path.home() / "benchmarks"
 OUTPUT_DIR = ROOT / "outputs"
 ONNX_DIR = ROOT / "models" / "onnx_ops"
 PROFILE_DIR = OUTPUT_DIR / "ort_profiles"
@@ -20,7 +26,6 @@ RUNTIME: RuntimeConfig = detect_runtime()
 
 
 def setup_env() -> None:
-    os.environ.setdefault("LD_LIBRARY_PATH", "/opt/rocm-7.2.0/lib:/opt/rocm/lib:/usr/lib/wsl/lib")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ONNX_DIR.mkdir(parents=True, exist_ok=True)
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)

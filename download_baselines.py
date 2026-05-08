@@ -1,5 +1,10 @@
+import io
 import os
+import sys
 from pathlib import Path
+
+# Force UTF-8 stdout to handle emoji on Windows
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 from datasets import load_dataset
 from torchvision import datasets, transforms
@@ -7,7 +12,7 @@ from torchvision.models import ResNet18_Weights, resnet18
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
-ROOT = Path("/home/l/benchmarks")
+ROOT = Path.home() / "benchmarks"
 DATA_DIR = ROOT / "data"
 MODEL_DIR = ROOT / "models"
 

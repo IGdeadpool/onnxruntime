@@ -13,10 +13,15 @@ from torchvision import datasets, transforms
 from torchvision.models import ResNet18_Weights, resnet18
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+import io
+import sys
+
 from benchmark_runtime import RuntimeConfig, detect_runtime
 
+# Force UTF-8 stdout to handle emoji from torch.onnx/ORT on Windows
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-ROOT = Path("/home/l/benchmarks")
+ROOT = Path.home() / "benchmarks"
 DATA_DIR = ROOT / "data"
 MODEL_DIR = ROOT / "models"
 OUTPUT_DIR = ROOT / "outputs"

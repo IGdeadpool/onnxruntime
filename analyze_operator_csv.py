@@ -1,8 +1,9 @@
 import csv
 from collections import defaultdict
+from pathlib import Path
 
 
-CSV_PATH = "/home/l/benchmarks/outputs/operator_results.csv"
+CSV_PATH = str(Path.home() / "benchmarks" / "outputs" / "operator_results.csv")
 
 
 def fnum(row, key, default=0.0):

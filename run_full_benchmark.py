@@ -1,5 +1,6 @@
 import argparse
 import csv
+import io
 import json
 import os
 import platform
@@ -13,10 +14,13 @@ from datetime import datetime
 from pathlib import Path
 from statistics import mean
 
+# Force UTF-8 stdout to handle emoji from torch.onnx/ORT on Windows
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
 from benchmark_runtime import detect_runtime
 
 
-DEFAULT_ROOT = Path("/home/l/benchmarks")
+DEFAULT_ROOT = Path.home() / "benchmarks"
 DEFAULT_OUTPUTS = DEFAULT_ROOT / "outputs"
 DEFAULT_RUNS = DEFAULT_ROOT / "runs"
 DEFAULT_PROFILE_DIR = DEFAULT_OUTPUTS / "ort_profiles"
@@ -178,6 +182,8 @@ class StepRunner:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                encoding="utf-8",
+                errors="replace",
             )
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -204,6 +210,8 @@ def run_capture(command: list[str], timeout: int = 20) -> dict[str, object]:
             stderr=subprocess.STDOUT,
             text=True,
             timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
         )
         return {
             "command": command,
