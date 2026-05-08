@@ -649,6 +649,45 @@ run_id 留空时，脚本会自动使用当前时间戳创建目录。
 如果目标 run 目录已存在，脚本会自动追加 _2、_3，不会覆盖上次结果。
 ```
 
+设备和 provider 配置：
+
+```text
+onnx_backend=auto
+onnx_providers=auto
+device_label=auto
+```
+
+自动识别规则：
+
+```text
+AMD ROCm:
+torch_backend=torch_rocm
+ONNX Runtime providers=MIGraphXExecutionProvider,CPUExecutionProvider
+
+NVIDIA CUDA:
+torch_backend=torch_cuda
+ONNX Runtime providers=CUDAExecutionProvider,CPUExecutionProvider
+
+CPU:
+torch_backend=torch_cpu
+ONNX Runtime providers=CPUExecutionProvider
+```
+
+单独检查当前机器识别结果：
+
+```bash
+python ~/benchmarks/scripts/benchmark_runtime.py
+```
+
+当前 RX 9070 XT WSL2 ROCm 环境验证结果：
+
+```text
+device_name=AMD Radeon RX 9070 XT
+torch_backend=torch_rocm
+onnx_backend=migraphx
+onnx_providers=MIGraphXExecutionProvider,CPUExecutionProvider
+```
+
 ### 13.2 一键运行完整流程
 
 ```bash
@@ -823,6 +862,48 @@ kill <pid>
 ```
 
 不要直接删除正在写入的 run 目录。
+
+### 13.8 当前 ROCm 自动 provider 验证记录
+
+已在当前 WSL2 + RX 9070 XT + ROCm 环境运行轻量验证：
+
+```bash
+python ~/benchmarks/scripts/run_full_benchmark.py \
+  --config ~/benchmarks/scripts/benchmark_config.example.jsonc \
+  --run-id rocm_auto_provider_smoke \
+  --baseline-models resnet18 \
+  --baseline-backends all \
+  --resnet-batches 1 \
+  --baseline-warmup 0 \
+  --baseline-iters 1 \
+  --operator-batches 1 \
+  --shape-profile standard \
+  --chain-len 2 \
+  --repeat 1 \
+  --operator-warmup 0 \
+  --operator-iters 1 \
+  --continue-on-error
+```
+
+输出目录：
+
+```text
+/home/l/benchmarks/runs/rocm_auto_provider_smoke
+```
+
+验证结果：
+
+```text
+metadata.json 中 runtime_detection 正确识别：
+device_name=AMD Radeon RX 9070 XT
+torch_backend=torch_rocm
+onnx_backend=migraphx
+onnx_providers=MIGraphXExecutionProvider,CPUExecutionProvider
+
+baseline_results.csv 生成 torch_rocm 和 onnxruntime:MIGraphXExecutionProvider,CPUExecutionProvider 两行。
+operator_pair_summary.csv 生成 12 个算子配对结果。
+profile_summary.csv 正常生成。
+```
 
 ### 13.4 导入 ORT profile 可视化工具
 

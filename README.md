@@ -13,6 +13,7 @@
 - `ORT_Profile_Analyzer使用说明.md`：profile 分析工具使用说明。
 - `AI芯片性能测试指导文档.md`：芯片性能测试层级、测试矩阵、自动化流程和问题清单。
 - `基线Benchmark部署流程.md`：当前基线 benchmark 的部署与运行流程。
+- `CODEX_CLI_CUDA部署引导.md`：另一台 RTX 3080/CUDA 机器使用 Codex CLI 部署和运行本流程的引导。
 - `部署教程.md`、`使用文档.md`：环境部署和日常使用说明。
 
 ## 推荐运行目录
@@ -119,6 +120,50 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
 其中 `steps_status.md` 是面向开发者阅读的步骤状态表，包含每一步状态、耗时、输出文件和失败原因。
 
 `run_id` 留空时会自动使用时间戳目录；如果目录已存在，会自动追加 `_2`、`_3`，不会覆盖上次结果。
+
+## 自动设备识别
+
+脚本会自动识别当前 GPU 并配置 PyTorch/ONNX Runtime backend：
+
+```text
+AMD ROCm:
+torch_backend=torch_rocm
+onnx_providers=MIGraphXExecutionProvider,CPUExecutionProvider
+
+NVIDIA CUDA:
+torch_backend=torch_cuda
+onnx_providers=CUDAExecutionProvider,CPUExecutionProvider
+
+CPU only:
+torch_backend=torch_cpu
+onnx_providers=CPUExecutionProvider
+```
+
+单独检查当前环境识别结果：
+
+```bash
+python ~/benchmarks/scripts/benchmark_runtime.py
+```
+
+配置文件中可以覆盖自动识别：
+
+```jsonc
+"onnx_backend": "auto",
+"onnx_providers": "auto",
+"device_label": "auto"
+```
+
+双体系对比时建议固定 `device_label`：
+
+```jsonc
+"device_label": "rx9070xt_rocm"
+```
+
+或：
+
+```jsonc
+"device_label": "rtx3080_cuda"
+```
 
 重新生成已有 run 的汇总，不重跑 benchmark：
 

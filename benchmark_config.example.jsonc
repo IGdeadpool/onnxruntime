@@ -31,6 +31,19 @@
   // 与 compare_run 对比时，延迟上升超过该百分比标记为 regression。
   "regression_threshold_pct": 10.0,
 
+  // 设备和 ONNX Runtime provider 配置。
+  // auto 会按当前 GPU 自动选择：
+  // - AMD ROCm: MIGraphXExecutionProvider,CPUExecutionProvider
+  // - NVIDIA CUDA: CUDAExecutionProvider,CPUExecutionProvider
+  // - CPU only: CPUExecutionProvider
+  "onnx_backend": "auto",
+  "onnx_providers": "auto",
+
+  // 设备标签会写入 metadata，建议双体系对比时手动固定：
+  // rx9070xt_rocm 或 rtx3080_cuda。
+  // auto 会根据 GPU 名称和 provider 自动生成。
+  "device_label": "auto",
+
   // 模型级 benchmark 配置。
   "baseline_models": "all",
   "baseline_backends": "all",

@@ -10,11 +10,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from benchmark_runtime import RuntimeConfig, detect_runtime
 
 ROOT = Path("/home/l/benchmarks")
 OUTPUT_DIR = ROOT / "outputs"
 ONNX_DIR = ROOT / "models" / "onnx_ops"
 PROFILE_DIR = OUTPUT_DIR / "ort_profiles"
+RUNTIME: RuntimeConfig = detect_runtime()
 
 
 def setup_env() -> None:
@@ -69,6 +71,10 @@ def mem_mb() -> float:
     if not torch.cuda.is_available():
         return 0.0
     return float(torch.cuda.max_memory_allocated() / (1024 * 1024))
+
+
+def torch_backend_name() -> str:
+    return RUNTIME.torch_backend
 
 
 def tflops(flops: float, latency_ms: float) -> float:
@@ -138,7 +144,7 @@ def row(
         "latency_max_ms": stats.get("latency_max_ms", 0.0),
         "tflops": tflops(flops, stats.get("latency_mean_ms", 0.0)),
         "bandwidth_gb_s": gbps(bytes_moved, stats.get("latency_mean_ms", 0.0)),
-        "gpu_mem_mb": mem_mb() if backend == "torch_rocm" else "",
+        "gpu_mem_mb": mem_mb() if backend in ("torch_rocm", "torch_cuda") else "",
         "profile_path": profile_path,
         "status": status,
         "error_message": error_message,
@@ -241,6 +247,7 @@ def run_onnx(
     warmup: int,
     iters: int,
     profile_name: str,
+    providers: list[str],
 ) -> tuple[dict[str, float], str, str, float, float, str]:
     import onnxruntime as ort
 
@@ -252,7 +259,7 @@ def run_onnx(
     sess = ort.InferenceSession(
         str(path),
         sess_options=so,
-        providers=["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+        providers=providers,
     )
     session_create_ms = (time.perf_counter() - start) * 1000.0
     provider = ",".join(sess.get_providers())
@@ -296,7 +303,7 @@ def torch_conv2d(batch: int, warmup: int, iters: int, repeat_id: int, shape_prof
         rows.append(
             row(
                 op_name="conv2d",
-                backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+                backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
                 dtype="fp32",
                 layout="nchw",
                 input_shape=str(tuple(x.shape)),
@@ -333,7 +340,7 @@ def torch_elementwise(batch: int, warmup: int, iters: int, repeat_id: int, shape
         rows.append(
             row(
                 op_name=name,
-                backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+                backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
                 dtype="fp32",
                 layout="nchw" if len(shape) == 4 else "nd",
                 input_shape=str(shape),
@@ -367,7 +374,7 @@ def torch_pool_norm(batch: int, warmup: int, iters: int, repeat_id: int, shape_p
         rows.append(
             row(
                 op_name=name,
-                backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+                backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
                 dtype="fp32",
                 layout="nchw",
                 input_shape=str(tuple(x.shape)),
@@ -397,7 +404,7 @@ def torch_linear_matmul(batch: int, warmup: int, iters: int, repeat_id: int, sha
     rows.append(
         row(
             op_name="linear",
-            backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+            backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
             dtype="fp32",
             layout="nc",
             input_shape=str(tuple(x.shape)),
@@ -422,7 +429,7 @@ def torch_linear_matmul(batch: int, warmup: int, iters: int, repeat_id: int, sha
     rows.append(
         row(
             op_name="batch_matmul",
-            backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+            backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
             dtype="fp32",
             layout="bmn_bnk",
             input_shape=f"{tuple(a.shape)};{tuple(b.shape)}",
@@ -463,7 +470,7 @@ def torch_transformer_ops(batch: int, seq_len: int, warmup: int, iters: int, rep
         rows.append(
             row(
                 op_name=name,
-                backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+                backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
                 dtype="fp32" if name != "embedding" else "int64/fp32",
                 layout=layout,
                 input_shape=input_shape,
@@ -685,7 +692,7 @@ def torch_basic_ops(
         rows.append(
             row(
                 op_name=name,
-                backend="torch_rocm" if dev.type == "cuda" else "torch_cpu",
+                backend=torch_backend_name() if dev.type == "cuda" else "torch_cpu",
                 dtype="int64/fp32" if any(t.dtype == torch.long for t in inputs) else "fp32",
                 layout=layout,
                 input_shape=";".join(str(tuple(t.shape)) for t in inputs),
@@ -808,7 +815,7 @@ def onnx_basic_ops(
                 for n, t in zip(input_names, inputs)
             }
             profile_name = f"ort_{name}_{shape_profile}_chain{effective_chain_len}_bs{batch}_rep{repeat_id}"
-            stats, provider, output_shape, session_create_ms, first_run_ms, profile_path = run_onnx(path, feed, warmup, iters, profile_name)
+            stats, provider, output_shape, session_create_ms, first_run_ms, profile_path = run_onnx(path, feed, warmup, iters, profile_name, RUNTIME.onnx_providers)
             graph_ops = onnx_graph_ops(path)
             rows.append(
                 row(
@@ -898,7 +905,7 @@ def write_rows(rows: list[dict[str, object]], output: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Operator-level benchmark for ROCm PyTorch and ONNX Runtime MIGraphX.")
+    parser = argparse.ArgumentParser(description="Operator-level benchmark for PyTorch and ONNX Runtime providers.")
     parser.add_argument("--backends", default="all", help="all,torch,onnx")
     parser.add_argument("--batches", default="1,8,16,32")
     parser.add_argument("--seq-len", type=int, default=128)
@@ -908,7 +915,21 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--output", default=str(OUTPUT_DIR / "operator_results.csv"))
+    parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
+    parser.add_argument("--onnx-providers", default="auto", help="auto or comma list such as CUDAExecutionProvider,CPUExecutionProvider")
+    parser.add_argument("--device-label", default="auto", help="auto or a stable label such as rx9070xt_rocm/rtx3080_cuda")
     args = parser.parse_args()
+
+    global RUNTIME
+    RUNTIME = detect_runtime(args.onnx_backend, args.onnx_providers, args.device_label)
+    print(
+        "Runtime "
+        f"device_label={RUNTIME.device_label} "
+        f"device_name={RUNTIME.device_name} "
+        f"torch_backend={RUNTIME.torch_backend} "
+        f"onnx_backend={RUNTIME.onnx_backend} "
+        f"onnx_providers={','.join(RUNTIME.onnx_providers)}"
+    )
 
     setup_env()
     backends = {x.strip() for x in args.backends.split(",")}

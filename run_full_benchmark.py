@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from statistics import mean
 
+from benchmark_runtime import detect_runtime
+
 
 DEFAULT_ROOT = Path("/home/l/benchmarks")
 DEFAULT_OUTPUTS = DEFAULT_ROOT / "outputs"
@@ -241,7 +243,16 @@ def collect_environment(run_dir: Path, args: argparse.Namespace) -> list[Path]:
                 "TRANSFORMERS_CACHE",
             ]
         },
+        "runtime_detection": {},
         "commands": {},
+    }
+    runtime = detect_runtime(args.onnx_backend, args.onnx_providers, args.device_label)
+    info["runtime_detection"] = {
+        "device_label": runtime.device_label,
+        "device_name": runtime.device_name,
+        "torch_backend": runtime.torch_backend,
+        "onnx_backend": runtime.onnx_backend,
+        "onnx_providers": runtime.onnx_providers,
     }
     commands = {
         "uname": ["uname", "-a"],
@@ -425,7 +436,7 @@ def operator_pairs(operator_csv: Path) -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
     for key in sorted(grouped, key=lambda x: (x[0], int(x[1] or 0), x[2])):
         item = grouped[key]
-        torch_rows = item.get("torch_rocm", [])
+        torch_rows = item.get("torch_rocm", []) + item.get("torch_cuda", []) + item.get("torch_cpu", [])
         ort_rows = item.get("onnxruntime", [])
         if not torch_rows or not ort_rows:
             continue
@@ -733,6 +744,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-operator", action="store_true")
     parser.add_argument("--compare-run", type=Path, default=None, help="Previous run directory or operator_results.csv")
     parser.add_argument("--regression-threshold-pct", type=float, default=10.0)
+    parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
+    parser.add_argument("--onnx-providers", default="auto", help="auto or comma list such as CUDAExecutionProvider,CPUExecutionProvider")
+    parser.add_argument("--device-label", default="auto", help="auto or a stable label such as rx9070xt_rocm/rtx3080_cuda")
 
     parser.add_argument("--baseline-models", default="all")
     parser.add_argument("--baseline-backends", default="all")
@@ -864,6 +878,12 @@ def main() -> int:
                 str(args.baseline_iters),
                 "--output",
                 str(baseline_csv),
+                "--onnx-backend",
+                args.onnx_backend,
+                "--onnx-providers",
+                args.onnx_providers,
+                "--device-label",
+                args.device_label,
             ],
             [baseline_csv],
         )
@@ -898,6 +918,12 @@ def main() -> int:
                 str(args.operator_iters),
                 "--output",
                 str(operator_csv),
+                "--onnx-backend",
+                args.onnx_backend,
+                "--onnx-providers",
+                args.onnx_providers,
+                "--device-label",
+                args.device_label,
             ],
             [operator_csv],
         )

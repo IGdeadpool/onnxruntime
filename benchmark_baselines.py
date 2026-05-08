@@ -13,6 +13,8 @@ from torchvision import datasets, transforms
 from torchvision.models import ResNet18_Weights, resnet18
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from benchmark_runtime import RuntimeConfig, detect_runtime
+
 
 ROOT = Path("/home/l/benchmarks")
 DATA_DIR = ROOT / "data"
@@ -25,6 +27,7 @@ HF_DATASETS_DIR = DATA_DIR / "huggingface_datasets"
 TORCH_MODEL_DIR = MODEL_DIR / "torch"
 HF_MODEL_DIR = MODEL_DIR / "huggingface"
 DISTILBERT_MODEL_ID = "distilbert-base-uncased-finetuned-sst-2-english"
+RUNTIME: RuntimeConfig = detect_runtime()
 
 
 def setup_env() -> None:
@@ -41,6 +44,10 @@ def setup_env() -> None:
 def sync_device() -> None:
     if torch.cuda.is_available():
         torch.cuda.synchronize()
+
+
+def torch_backend_name() -> str:
+    return RUNTIME.torch_backend
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -116,7 +123,7 @@ def run_resnet18_torch(batch_size: int, warmup: int, iters: int) -> dict[str, ob
         **stats,
         "model": "resnet18",
         "dataset": "cifar10",
-        "backend": "torch_rocm" if device.type == "cuda" else "torch_cpu",
+        "backend": torch_backend_name() if device.type == "cuda" else "torch_cpu",
         "batch_size": batch_size,
         "seq_len": "",
         "samples_per_sec": batch_size / (stats["latency_mean_ms"] / 1000.0),
@@ -152,7 +159,7 @@ def run_resnet18_onnx(batch_size: int, warmup: int, iters: int) -> dict[str, obj
     images, labels = load_resnet18_batch(batch_size)
     x = images.numpy().astype(np.float32)
 
-    sess = ort.InferenceSession(str(path), providers=["MIGraphXExecutionProvider", "CPUExecutionProvider"])
+    sess = ort.InferenceSession(str(path), providers=RUNTIME.onnx_providers)
     active = ",".join(sess.get_providers())
 
     stats = benchmark_callable(lambda: sess.run(None, {"input": x}), warmup, iters)
@@ -208,7 +215,7 @@ def run_distilbert_torch(batch_size: int, seq_len: int, warmup: int, iters: int)
         **stats,
         "model": "distilbert-base-uncased-finetuned-sst-2-english",
         "dataset": "glue/sst2-validation",
-        "backend": "torch_rocm" if device.type == "cuda" else "torch_cpu",
+        "backend": torch_backend_name() if device.type == "cuda" else "torch_cpu",
         "batch_size": batch_size,
         "seq_len": seq_len,
         "samples_per_sec": batch_size / (stats["latency_mean_ms"] / 1000.0),
@@ -248,7 +255,7 @@ def run_distilbert_onnx(batch_size: int, seq_len: int, warmup: int, iters: int) 
         "input_ids": batch["input_ids"].numpy().astype(np.int64),
         "attention_mask": batch["attention_mask"].numpy().astype(np.int64),
     }
-    sess = ort.InferenceSession(str(path), providers=["MIGraphXExecutionProvider", "CPUExecutionProvider"])
+    sess = ort.InferenceSession(str(path), providers=RUNTIME.onnx_providers)
     active = ",".join(sess.get_providers())
 
     stats = benchmark_callable(lambda: sess.run(None, inputs), warmup, iters)
@@ -312,7 +319,21 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--output", default=str(OUTPUT_DIR / "baseline_results.csv"))
+    parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
+    parser.add_argument("--onnx-providers", default="auto", help="auto or comma list such as CUDAExecutionProvider,CPUExecutionProvider")
+    parser.add_argument("--device-label", default="auto", help="auto or a stable label such as rx9070xt_rocm/rtx3080_cuda")
     args = parser.parse_args()
+
+    global RUNTIME
+    RUNTIME = detect_runtime(args.onnx_backend, args.onnx_providers, args.device_label)
+    print(
+        "Runtime "
+        f"device_label={RUNTIME.device_label} "
+        f"device_name={RUNTIME.device_name} "
+        f"torch_backend={RUNTIME.torch_backend} "
+        f"onnx_backend={RUNTIME.onnx_backend} "
+        f"onnx_providers={','.join(RUNTIME.onnx_providers)}"
+    )
 
     setup_env()
     models = {x.strip() for x in args.models.split(",")}
