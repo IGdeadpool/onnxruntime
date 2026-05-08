@@ -182,6 +182,12 @@ class VectorAddModule(nn.Module):
         return x + y
 
 
+class MatrixMulModule(nn.Module):
+    """2D matrix multiplication A(M×K) × B(K×N) — distinct from 3D batch_matmul."""
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return torch.matmul(x, y)
+
+
 class EmbeddingModule(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -600,6 +606,22 @@ def torch_basic_ops(
         )
     )
 
+    mm_m, mm_k, mm_n = (4096, 4096, 4096) if shape_profile == "large" else (1024, 1024, 1024)
+    ma = torch.randn(mm_m, mm_k, device=dev)
+    mb = torch.randn(mm_k, mm_n, device=dev)
+    specs.append(
+        (
+            "matrixMul",
+            MatMulChainModule(chain_len).eval().to(dev),
+            (ma, mb),
+            "nm_nk",
+            f"m={mm_m};k={mm_k};n={mm_n}",
+            2.0 * mm_m * mm_k * mm_n * chain_len,
+            tensor_bytes(tuple(ma.shape), tuple(mb.shape), (mm_m, mm_n)) * chain_len,
+            chain_len,
+        )
+    )
+
     cin, cout, h, w, ksize, stride, pad = (
         (256, 256, 56, 56, 3, 1, 1)
         if shape_profile == "large"
@@ -781,6 +803,23 @@ def onnx_basic_ops(
             f"m={m};k={k};n={n}",
             2.0 * batch * m * k * n * chain_len,
             tensor_bytes(tuple(mm_a.shape), tuple(mm_b.shape), (batch, m, n)) * chain_len,
+            chain_len,
+        )
+    )
+
+    mm_m, mm_k, mm_n = (4096, 4096, 4096) if shape_profile == "large" else (1024, 1024, 1024)
+    ma = torch.randn(mm_m, mm_k)
+    mb = torch.randn(mm_k, mm_n)
+    specs.append(
+        (
+            "matrixMul",
+            MatMulChainModule(chain_len).eval(),
+            (ma, mb),
+            ["x", "y"],
+            "nm_nk",
+            f"m={mm_m};k={mm_k};n={mm_n}",
+            2.0 * mm_m * mm_k * mm_n * chain_len,
+            tensor_bytes(tuple(ma.shape), tuple(mb.shape), (mm_m, mm_n)) * chain_len,
             chain_len,
         )
     )
