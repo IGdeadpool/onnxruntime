@@ -176,6 +176,12 @@ class SoftmaxModule(nn.Module):
         return F.softmax(x, dim=-1)
 
 
+class VectorAddModule(nn.Module):
+    """1D vector element-wise addition — distinct from the 4D `add` operator."""
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return x + y
+
+
 class EmbeddingModule(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -535,6 +541,22 @@ def torch_basic_ops(
         )
     )
 
+    vec_size = 65536 if shape_profile == "large" else 4096
+    va = torch.randn(batch, vec_size, device=dev)
+    vb = torch.randn(batch, vec_size, device=dev)
+    specs.append(
+        (
+            "vectorAdd",
+            AddChainModule(chain_len).eval().to(dev),
+            (va, vb),
+            "nc",
+            f"size={vec_size}",
+            float(batch * vec_size) * chain_len,
+            tensor_bytes(tuple(va.shape), tuple(vb.shape), tuple(va.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
     hidden = 1024 if shape_profile == "large" else 768
     gelu_x = torch.randn(batch, seq_len, hidden, device=dev)
     specs.append(
@@ -735,6 +757,11 @@ def onnx_basic_ops(
     a4 = torch.randn(*add_shape)
     b4 = torch.randn(*add_shape)
     specs.append(("add", AddChainModule(chain_len).eval(), (a4, b4), ["x", "y"], "nchw", f"shape={add_shape}", 0.0, tensor_bytes(tuple(a4.shape), tuple(b4.shape), tuple(a4.shape)) * chain_len, chain_len))
+
+    vec_size = 65536 if shape_profile == "large" else 4096
+    va = torch.randn(batch, vec_size)
+    vb = torch.randn(batch, vec_size)
+    specs.append(("vectorAdd", AddChainModule(chain_len).eval(), (va, vb), ["x", "y"], "nc", f"size={vec_size}", float(batch * vec_size) * chain_len, tensor_bytes(tuple(va.shape), tuple(vb.shape), tuple(va.shape)) * chain_len, chain_len))
 
     hidden = 1024 if shape_profile == "large" else 768
     gelu_x = torch.randn(batch, seq_len, hidden)
