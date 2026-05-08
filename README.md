@@ -153,6 +153,8 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
 
 `run_id` 留空时会自动使用时间戳目录；如果目录已存在，会自动追加 `_2`、`_3`，不会覆盖上次结果。
 
+数据和模型加载采用本地缓存优先策略：GLUE/SST-2、DistilBERT tokenizer/model 会先用 HuggingFace 本地缓存读取，不再每次联网检查或重复下载；只有缓存缺失时才回退到下载。CIFAR-10 仍使用本地目录，缺失时需要先执行下载脚本准备数据。
+
 ## 自动设备识别
 
 脚本会自动识别当前 GPU 并配置 PyTorch/ONNX Runtime backend：

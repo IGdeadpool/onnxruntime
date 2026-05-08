@@ -761,6 +761,9 @@ steps_status.md:
 metadata.json:
 环境快照，包括 OS、Python、PyTorch、ONNX Runtime、ROCm/GPU 信息和关键环境变量。
 
+数据集和模型缓存:
+benchmark_baselines.py 会优先从本地缓存读取 HuggingFace 数据集和模型，不会在缓存已存在时每次访问 HuggingFace。只有本地缓存缺失时才回退到下载。CIFAR-10 仍要求本地目录已准备好。
+
 baseline_results.csv:
 模型级 benchmark 原始结果。
 

@@ -7,7 +7,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 import torch
-from datasets import load_dataset
+from datasets import Dataset, DownloadConfig, load_dataset
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.models import ResNet18_Weights, resnet18
@@ -39,6 +39,32 @@ def setup_env() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ONNX_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_hf_dataset_cached_first(*args, **kwargs):
+    kwargs.setdefault("cache_dir", str(HF_DATASETS_DIR))
+    try:
+        return load_dataset(*args, download_config=DownloadConfig(local_files_only=True), **kwargs)
+    except Exception as local_exc:
+        print(f"HuggingFace dataset cache miss, falling back to download: {local_exc}")
+        return load_dataset(*args, **kwargs)
+
+
+def load_sst2_validation_cached_first() -> Dataset:
+    cache_root = HF_DATASETS_DIR / "glue" / "sst2"
+    arrow_files = sorted(cache_root.glob("**/glue-validation.arrow"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if arrow_files:
+        return Dataset.from_file(str(arrow_files[0]))
+    return load_hf_dataset_cached_first("glue", "sst2", split="validation")
+
+
+def from_pretrained_cached_first(factory, model_id: str, **kwargs):
+    kwargs.setdefault("cache_dir", str(HF_MODEL_DIR))
+    try:
+        return factory.from_pretrained(model_id, local_files_only=True, **kwargs)
+    except Exception as local_exc:
+        print(f"HuggingFace model cache miss, falling back to download: {model_id}: {local_exc}")
+        return factory.from_pretrained(model_id, **kwargs)
 
 
 def sync_device() -> None:
@@ -219,9 +245,9 @@ def run_resnet18_onnx(batch_size: int, warmup: int, iters: int, correctness_rtol
 
 
 def load_distilbert_batch(batch_size: int, seq_len: int) -> dict[str, torch.Tensor]:
-    dataset = load_dataset("glue", "sst2", split="validation", cache_dir=str(HF_DATASETS_DIR))
+    dataset = load_sst2_validation_cached_first()
     texts = list(dataset.select(range(batch_size))["sentence"])
-    tokenizer = AutoTokenizer.from_pretrained(DISTILBERT_MODEL_ID, cache_dir=str(HF_MODEL_DIR))
+    tokenizer = from_pretrained_cached_first(AutoTokenizer, DISTILBERT_MODEL_ID)
     encoded = tokenizer(
         texts,
         padding="max_length",
@@ -234,10 +260,7 @@ def load_distilbert_batch(batch_size: int, seq_len: int) -> dict[str, torch.Tens
 
 def run_distilbert_torch(batch_size: int, seq_len: int, warmup: int, iters: int) -> dict[str, object]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = AutoModelForSequenceClassification.from_pretrained(
-        DISTILBERT_MODEL_ID,
-        cache_dir=str(HF_MODEL_DIR),
-    ).eval().to(device)
+    model = from_pretrained_cached_first(AutoModelForSequenceClassification, DISTILBERT_MODEL_ID).eval().to(device)
     batch = {k: v.to(device) for k, v in load_distilbert_batch(batch_size, seq_len).items()}
 
     if torch.cuda.is_available():
@@ -271,10 +294,7 @@ def export_distilbert_onnx(batch_size: int, seq_len: int) -> Path:
     if path.exists() and path.stat().st_size > 0:
         return path
 
-    model = AutoModelForSequenceClassification.from_pretrained(
-        DISTILBERT_MODEL_ID,
-        cache_dir=str(HF_MODEL_DIR),
-    ).eval()
+    model = from_pretrained_cached_first(AutoModelForSequenceClassification, DISTILBERT_MODEL_ID).eval()
     batch = load_distilbert_batch(batch_size, seq_len)
     torch.onnx.export(
         model,
@@ -308,10 +328,7 @@ def run_distilbert_onnx(
 
     stats = benchmark_callable(lambda: sess.run(None, inputs), warmup, iters)
     logits = sess.run(None, inputs)[0]
-    ref_model = AutoModelForSequenceClassification.from_pretrained(
-        DISTILBERT_MODEL_ID,
-        cache_dir=str(HF_MODEL_DIR),
-    ).eval()
+    ref_model = from_pretrained_cached_first(AutoModelForSequenceClassification, DISTILBERT_MODEL_ID).eval()
     with torch.no_grad():
         ref_logits = ref_model(**batch).logits.detach().numpy()
     correctness = correctness_metrics(ref_logits, logits, rtol=correctness_rtol, atol=correctness_atol)
