@@ -40,37 +40,67 @@ def pct(values: list[float], q: float) -> float:
 
 
 # ── Experiment kernels ──────────────────────────────────────────────────────
-# Each kernel is a function (size, iters) -> None that burns GPU compute.
+# Each kernel is split into setup() → compute() so that multi-stream timing
+# excludes CUDA memory allocation (which serializes across streams).
 
 
-def _gevm_kernel(size: int, iters: int) -> None:
-    """GEMM-like square matmul — high compute density."""
-    a = torch.randn(size, size, device="cuda", dtype=torch.float32)
-    b = torch.randn(size, size, device="cuda", dtype=torch.float32)
-    for _ in range(iters):
-        a = torch.matmul(a, b)
+class GEVMM:
+    def __init__(self, size: int, iters: int):
+        self.size = size
+        self.iters = iters
+
+    def setup(self) -> None:
+        self.a = torch.randn(self.size, self.size, device="cuda", dtype=torch.float32)
+        self.b = torch.randn(self.size, self.size, device="cuda", dtype=torch.float32)
+
+    def compute(self) -> None:
+        a = self.a
+        for _ in range(self.iters):
+            a = torch.matmul(a, self.b)
 
 
-def _vector_kernel(size: int, iters: int) -> None:
-    """Element-wise vector add — low compute, high bandwidth."""
-    a = torch.randn(size, device="cuda", dtype=torch.float32)
-    b = torch.randn(size, device="cuda", dtype=torch.float32)
-    for _ in range(iters):
-        a = a + b
+class VectorAdd:
+    def __init__(self, size: int, iters: int):
+        self.size = size
+        self.iters = iters
+
+    def setup(self) -> None:
+        self.a = torch.randn(self.size, device="cuda", dtype=torch.float32)
+        self.b = torch.randn(self.size, device="cuda", dtype=torch.float32)
+
+    def compute(self) -> None:
+        a = self.a
+        for _ in range(self.iters):
+            a = a + self.b
 
 
-def _conv2d_kernel(size: int, iters: int) -> None:
-    """Conv2d — typical CNN workload."""
-    x = torch.randn(1, 64, size, size, device="cuda", dtype=torch.float32)
-    conv = torch.nn.Conv2d(64, 64, 3, padding=1, bias=False).cuda().eval()
-    for _ in range(iters):
-        x = conv(x)
+class Conv2dK:
+    def __init__(self, size: int, iters: int):
+        self.size = size
+        self.iters = iters
+
+    def setup(self) -> None:
+        self.x = torch.randn(1, 64, self.size, self.size, device="cuda", dtype=torch.float32)
+        self.conv = torch.nn.Conv2d(64, 64, 3, padding=1, bias=False).cuda().eval()
+
+    def compute(self) -> None:
+        x = self.x
+        for _ in range(self.iters):
+            x = self.conv(x)
 
 
-KERNELS = {
-    "gevm": _gevm_kernel,
-    "vector": _vector_kernel,
-    "conv2d": _conv2d_kernel,
+# Factory: (name, cls)
+KERNEL_CLASSES = {
+    "gevm": GEVMM,
+    "vector": VectorAdd,
+    "conv2d": Conv2dK,
+}
+
+# Legacy kernel refs for single-stream baseline (keeps alloc inside timer for apples-to-apples)
+KERNELS_ALLOC = {
+    "gevm": lambda size, iters: GEVMM(size, iters).compute(),
+    "vector": lambda size, iters: VectorAdd(size, iters).compute(),
+    "conv2d": lambda size, iters: Conv2dK(size, iters).compute(),
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -170,23 +200,27 @@ class StreamResult:
         }
 
 
-# ── Experiment 1: Single-stream baseline ───────────────────────────────────
+# ── Experiment 1: Single-stream baseline (alloc + compute timed together) ──
 
 
-def run_single_stream(kernel_fn, matrix_size: int, iters: int, warmup: int, repeat: int) -> list[float]:
-    """All work on the default stream. Returns list of per-repeat latencies (ms)."""
+def run_single_stream(kernel_cls, matrix_size: int, iters: int, warmup: int, repeat: int) -> list[float]:
+    """All work including alloc on the default stream."""
     latencies: list[float] = []
     start_ev = torch.cuda.Event(enable_timing=True)
     end_ev = torch.cuda.Event(enable_timing=True)
 
-    # Warmup
+    def _one_shot() -> None:
+        k = kernel_cls(matrix_size, iters)
+        k.setup()
+        k.compute()
+
     for _ in range(warmup):
-        kernel_fn(matrix_size, iters)
+        _one_shot()
 
     for _ in range(repeat):
         torch.cuda.synchronize()
         start_ev.record()
-        kernel_fn(matrix_size, iters)
+        _one_shot()
         end_ev.record()
         torch.cuda.synchronize()
         latencies.append(torch_event_time(start_ev, end_ev))
@@ -194,21 +228,27 @@ def run_single_stream(kernel_fn, matrix_size: int, iters: int, warmup: int, repe
     return latencies
 
 
-# ── Experiment 2: N-stream concurrent ───────────────────────────────────────
+# ── Experiment 2: N-stream concurrent (pre-alloc → only compute timed) ──────
 
 
-def run_multi_stream(kernel_fn, matrix_size: int, iters: int, num_streams: int,
+def run_multi_stream(kernel_cls, matrix_size: int, iters: int, num_streams: int,
                      warmup: int, repeat: int) -> list[float]:
-    """Launch identical kernels on N streams concurrently. Returns wall-time latencies (ms)."""
+    """Pre-allocate one kernel per stream, then launch compute concurrently."""
     streams = [torch.cuda.Stream() for _ in range(num_streams)]
+    instances = []
+    for _ in range(num_streams):
+        k = kernel_cls(matrix_size, iters)
+        k.setup()
+        instances.append(k)
+
     latencies: list[float] = []
     wall_start = torch.cuda.Event(enable_timing=True)
     wall_end = torch.cuda.Event(enable_timing=True)
 
     def _dispatch() -> None:
-        for s in streams:
+        for s, k in zip(streams, instances):
             with torch.cuda.stream(s):
-                kernel_fn(matrix_size, iters)
+                k.compute()
 
     # Warmup
     for _ in range(warmup):
@@ -316,11 +356,11 @@ def run_all(args: argparse.Namespace) -> list[StreamResult]:
     results: list[StreamResult] = []
 
     for kernel_name in args.kernels:
-        kernel_fn = KERNELS[kernel_name]
+        kernel_cls = KERNEL_CLASSES[kernel_name]
 
-        # --- baseline: single stream ---
+        # --- baseline: single stream (alloc included in timing) ---
         reset_peak()
-        bl_lat = run_single_stream(kernel_fn, args.matrix_size, args.iters, args.warmup, args.repeat)
+        bl_lat = run_single_stream(kernel_cls, args.matrix_size, args.iters, args.warmup, args.repeat)
         bl_ms = float(np.mean(bl_lat)) if bl_lat else 0.0
         results.append(StreamResult(
             experiment="single_stream",
@@ -333,12 +373,12 @@ def run_all(args: argparse.Namespace) -> list[StreamResult]:
             gpu_mem=peak_mem_mb(),
         ))
 
-        # --- N-stream concurrent (2, 4, 8, ...) ---
+        # --- N-stream concurrent (pre-alloc, only compute timed) ---
         for n in args.num_streams_list:
             if n <= 1:
                 continue
             reset_peak()
-            lat = run_multi_stream(kernel_fn, args.matrix_size, args.iters, n, args.warmup, args.repeat)
+            lat = run_multi_stream(kernel_cls, args.matrix_size, args.iters, n, args.warmup, args.repeat)
             r = StreamResult(
                 experiment=f"multi_stream_{n}",
                 num_streams=n,
@@ -396,7 +436,7 @@ def main() -> int:
     parser.add_argument("--repeat", type=int, default=5)
     args = parser.parse_args()
 
-    args.kernels = [k.strip() for k in args.kernels.split(",") if k.strip() in KERNELS]
+    args.kernels = [k.strip() for k in args.kernels.split(",") if k.strip() in KERNEL_CLASSES]
     args.num_streams_list = [int(x.strip()) for x in args.num_streams.split(",") if x.strip().isdigit()]
 
     setup_env()
