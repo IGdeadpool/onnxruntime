@@ -815,6 +815,14 @@ shape_mismatch / output_count_mismatch:
 
 FP32 基准建议先固定该容差。若新芯片使用 FP16、BF16、INT8 或近似数学库，可以放宽容差，但需要在开发文档里记录精度模式和放宽原因。
 
+注意：
+
+```text
+算子级 ONNX 会在每次运行时按当前模块重新导出。
+原因是 conv2d / linear / embedding 等算子包含随机初始化权重，复用旧 ONNX 文件会导致 ONNX 权重和 PyTorch 参考权重不一致，从而产生虚假的高错误率。
+模型级 ResNet18 / DistilBERT 使用固定预训练权重，仍可复用已导出的 ONNX 文件。
+```
+
 `operator_results.csv` 的 chain 规则：
 
 ```text

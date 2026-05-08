@@ -288,8 +288,14 @@ class MatMulChainModule(nn.Module):
         return x
 
 
-def export_onnx_once(module: nn.Module, inputs: tuple[torch.Tensor, ...], path: Path, names: list[str]) -> Path:
-    if path.exists() and path.stat().st_size > 0:
+def export_onnx_once(
+    module: nn.Module,
+    inputs: tuple[torch.Tensor, ...],
+    path: Path,
+    names: list[str],
+    use_cache: bool = True,
+) -> Path:
+    if use_cache and path.exists() and path.stat().st_size > 0:
         return path
     module.eval().cpu()
     torch.onnx.export(
@@ -885,7 +891,10 @@ def onnx_basic_ops(
     for name, module, inputs, input_names, layout, attrs, flops, bytes_moved, effective_chain_len in specs:
         path = ONNX_DIR / f"op_{name}_{shape_profile}_chain{effective_chain_len}_bs{batch}_seq{seq_len}.onnx"
         try:
-            export_onnx_once(module, inputs, path, input_names)
+            # Operator modules can contain randomly initialized parameters.
+            # Re-export to keep ONNX weights aligned with the PyTorch reference
+            # used by correctness validation.
+            export_onnx_once(module, inputs, path, input_names, use_cache=False)
             feed = {
                 n: t.numpy().astype(np.int64 if t.dtype == torch.long else np.float32)
                 for n, t in zip(input_names, inputs)

@@ -223,6 +223,8 @@ correctness_message
 
 `correctness_status=ok` 表示通过当前 `correctness_rtol/correctness_atol` 容差；`reference` 表示该行是 Torch 参考结果；`mismatch`、`shape_mismatch` 或 `output_count_mismatch` 需要优先看 `summary.md` 里的 `Correctness Issues`。新芯片或低精度模式可以调整容差，但要在开发记录中说明原因。
 
+算子级 ONNX 会按每次运行的当前模块重新导出，避免 `conv2d/linear/embedding` 这类随机权重算子复用旧 ONNX 文件造成虚假的高错误率。模型级 ResNet18 和 DistilBERT 使用固定预训练权重，仍可复用已导出的 ONNX 文件。
+
 ## ORT Profile 可视化
 
 Windows 打开：
