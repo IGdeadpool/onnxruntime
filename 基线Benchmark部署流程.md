@@ -767,6 +767,10 @@ baseline_results.csv:
 operator_results.csv:
 算子级 benchmark 原始结果。
 
+正确性校验字段:
+baseline_results.csv 和 operator_results.csv 会包含 correctness_status、max_abs_error、max_rel_error、correctness_message。
+ONNX Runtime 行会和 PyTorch eager 参考输出比较；Torch 行标记为 reference。
+
 profile_collect_summary.txt:
 记录从 outputs/ort_profiles 收集到本轮 run 目录的 JSON 文件。
 
@@ -782,6 +786,31 @@ regression_report.csv:
 summary.md:
 本轮 benchmark 的最终人类可读报告。
 ```
+
+正确性状态说明：
+
+```text
+ok:
+ONNX Runtime 输出在 correctness_rtol / correctness_atol 容差内。
+
+reference:
+Torch eager 参考行，不参与正确性失败统计。
+
+mismatch:
+shape 一致但数值误差超出容差，需要结合 max_abs_error、max_rel_error 和 ORT profiling 判断。
+
+shape_mismatch / output_count_mismatch:
+输出结构不一致，通常优先检查 ONNX 导出、动态 shape、provider kernel 输出定义或 fallback 路径。
+```
+
+配置文件中的默认容差：
+
+```jsonc
+"correctness_rtol": 0.001,
+"correctness_atol": 0.0001
+```
+
+FP32 基准建议先固定该容差。若新芯片使用 FP16、BF16、INT8 或近似数学库，可以放宽容差，但需要在开发文档里记录精度模式和放宽原因。
 
 `operator_results.csv` 的 chain 规则：
 

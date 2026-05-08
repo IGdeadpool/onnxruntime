@@ -44,6 +44,12 @@
   // auto 会根据 GPU 名称和 provider 自动生成。
   "device_label": "auto",
 
+  // ONNX 输出正确性校验容差。
+  // ONNX Runtime 结果会和 PyTorch eager 参考输出比较，status 写入 correctness_status。
+  // FP32 建议先用 rtol=1e-3、atol=1e-4；启用 FP16/INT8 或新芯片近似算子时应单独放宽并记录原因。
+  "correctness_rtol": 0.001,
+  "correctness_atol": 0.0001,
+
   // 模型级 benchmark 配置。
   "baseline_models": "all",
   "baseline_backends": "all",

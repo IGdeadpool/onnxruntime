@@ -187,6 +187,8 @@ steps_status.md
 logs/
 ```
 
+同时检查 `summary.md` 中的 `Correctness Issues`。`correctness_status=ok` 才能进入性能对比；若 CUDA/ROCm 或新芯片低精度模式需要放宽 `correctness_rtol/correctness_atol`，必须在 run 记录中说明。
+
 ## 9. 与 AMD ROCm 对比
 
 将 RTX 3080 的 run 目录和 AMD ROCm 的 run 目录放到同一台机器后，可以比较：

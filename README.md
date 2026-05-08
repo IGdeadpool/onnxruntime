@@ -182,7 +182,9 @@ python ~/benchmarks/scripts/benchmark_runtime.py
 ```jsonc
 "onnx_backend": "auto",
 "onnx_providers": "auto",
-"device_label": "auto"
+"device_label": "auto",
+"correctness_rtol": 0.001,
+"correctness_atol": 0.0001
 ```
 
 双体系对比时建议固定 `device_label`：
@@ -205,6 +207,19 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
 ```
 
 `operator_pair_summary.csv` 按 `op_name + batch_size + shape_profile` 配对 Torch ROCm 与 ONNX Runtime，并使用 `latency_per_op_mean_ms` 比较。新版算子脚本会让 Torch 与 ONNX 使用同一套有效 chain：可链式算子使用配置里的 `chain_len`，pool 和 embedding 使用 `effective_chain=1`。
+
+## 正确性校验
+
+模型级和算子级 ONNX Runtime 结果会自动和 PyTorch eager 参考输出比较，并在 CSV 中写入：
+
+```text
+correctness_status
+max_abs_error
+max_rel_error
+correctness_message
+```
+
+`correctness_status=ok` 表示通过当前 `correctness_rtol/correctness_atol` 容差；`reference` 表示该行是 Torch 参考结果；`mismatch`、`shape_mismatch` 或 `output_count_mismatch` 需要优先看 `summary.md` 里的 `Correctness Issues`。新芯片或低精度模式可以调整容差，但要在开发记录中说明原因。
 
 ## ORT Profile 可视化
 

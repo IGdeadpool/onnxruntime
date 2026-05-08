@@ -1620,7 +1620,7 @@ metadata.json:
 记录 device_label、device_name、torch_backend 或 native backend、onnx_providers。
 
 operator_results.csv:
-记录每个算子的 status、provider、latency、p95、chain_len、profile_path。
+记录每个算子的 status、provider、latency、p95、chain_len、profile_path、correctness_status、max_abs_error、max_rel_error。
 
 profile_summary.csv:
 记录 ORT profiling JSON 中的 Session/Node/kernel 耗时和 provider。
@@ -1649,4 +1649,7 @@ kernel、DMA、layout transform、memory planning 或 queue overhead。
 
 p95/mean 高:
 驱动调度抖动、同步机制、频率变化、内存碎片或系统负载。
+
+correctness_status=mismatch:
+先暂停性能结论，检查 ONNX 导出、dtype、layout、广播语义、近似数学库和 provider fallback。新芯片开发应先让 P0 算子 correctness_status=ok，再看 latency / p95 / profiling。
 ```

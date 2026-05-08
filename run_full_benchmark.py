@@ -468,6 +468,9 @@ def operator_pairs(operator_csv: Path) -> list[dict[str, object]]:
             "ort_p95_ms": round(mean([to_float(row.get("latency_p95_ms")) for row in ort_rows]), 6),
             "provider": ort_rows[-1].get("provider", ""),
             "profile_path": ort_rows[-1].get("profile_path", ""),
+            "correctness_status": ort_rows[-1].get("correctness_status", ""),
+            "max_abs_error": ort_rows[-1].get("max_abs_error", ""),
+            "max_rel_error": ort_rows[-1].get("max_rel_error", ""),
         })
     return out
 
@@ -488,6 +491,9 @@ def summarize_operator(operator_csv: Path, output_csv: Path) -> list[dict[str, o
         "ort_p95_ms",
         "provider",
         "profile_path",
+        "correctness_status",
+        "max_abs_error",
+        "max_rel_error",
     ]
     rows = operator_pairs(operator_csv)
     write_csv(output_csv, rows, fields)
@@ -647,6 +653,10 @@ def write_summary(
     operator_rows = read_csv(operator_csv)
     baseline_errors = [r for r in baseline_rows if r.get("status") != "ok"]
     operator_errors = [r for r in operator_rows if r.get("status") != "ok"]
+    correctness_issues = [
+        r for r in baseline_rows + operator_rows
+        if r.get("correctness_status") not in ("", "ok", "reference")
+    ]
     cpu_fallback = [r for r in profile_rows if r.get("has_cpu_fallback") == "yes"]
     regressions = [r for r in regression_rows if r.get("status") == "regression"]
     best_ort = sorted(operator_summary, key=lambda r: to_float(r.get("ort_div_torch")))[:8]
@@ -677,6 +687,7 @@ def write_summary(
         f"- baseline errors: `{len(baseline_errors)}`",
         f"- operator rows: `{len(operator_rows)}`",
         f"- operator errors: `{len(operator_errors)}`",
+        f"- correctness issues: `{len(correctness_issues)}`",
         f"- profile json summaries: `{len(profile_rows)}`",
         f"- CPU fallback profile rows: `{len(cpu_fallback)}`",
         f"- regressions over threshold: `{len(regressions)}`",
@@ -725,6 +736,22 @@ def write_summary(
                 f"{row.get('chain_len','')} | {row.get('previous_ms','')} | {row.get('current_ms','')} | {row.get('change_pct','')} |"
             )
 
+    if correctness_issues:
+        lines += [
+            "",
+            "## Correctness Issues",
+            "",
+            "| item | backend | batch | status | max_abs | max_rel | message |",
+            "|---|---|---:|---|---:|---:|---|",
+        ]
+        for row in correctness_issues[:50]:
+            item = row.get("op_name") or row.get("model") or ""
+            lines.append(
+                f"| {item} | {row.get('backend','')} | {row.get('batch_size','')} | "
+                f"{row.get('correctness_status','')} | {row.get('max_abs_error','')} | "
+                f"{row.get('max_rel_error','')} | {row.get('correctness_message','')} |"
+            )
+
     summary_path = run_dir / "summary.md"
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary_path
@@ -747,6 +774,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
     parser.add_argument("--onnx-providers", default="auto", help="auto or comma list such as CUDAExecutionProvider,CPUExecutionProvider")
     parser.add_argument("--device-label", default="auto", help="auto or a stable label such as rx9070xt_rocm/rtx3080_cuda")
+    parser.add_argument("--correctness-rtol", type=float, default=1e-3)
+    parser.add_argument("--correctness-atol", type=float, default=1e-4)
 
     parser.add_argument("--baseline-models", default="all")
     parser.add_argument("--baseline-backends", default="all")
@@ -884,6 +913,10 @@ def main() -> int:
                 args.onnx_providers,
                 "--device-label",
                 args.device_label,
+                "--correctness-rtol",
+                str(args.correctness_rtol),
+                "--correctness-atol",
+                str(args.correctness_atol),
             ],
             [baseline_csv],
         )
@@ -924,6 +957,10 @@ def main() -> int:
                 args.onnx_providers,
                 "--device-label",
                 args.device_label,
+                "--correctness-rtol",
+                str(args.correctness_rtol),
+                "--correctness-atol",
+                str(args.correctness_atol),
             ],
             [operator_csv],
         )

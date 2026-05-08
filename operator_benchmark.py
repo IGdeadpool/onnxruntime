@@ -93,6 +93,68 @@ def tensor_bytes(*shapes: tuple[int, ...], dtype_bytes: int = 4) -> int:
     return sum(int(np.prod(shape)) * dtype_bytes for shape in shapes)
 
 
+def correctness_metrics(reference: np.ndarray, actual: np.ndarray, rtol: float, atol: float) -> dict[str, object]:
+    ref = np.asarray(reference)
+    got = np.asarray(actual)
+    if ref.shape != got.shape:
+        return {
+            "correctness_status": "shape_mismatch",
+            "max_abs_error": "",
+            "max_rel_error": "",
+            "correctness_message": f"reference_shape={ref.shape};actual_shape={got.shape}",
+        }
+    if not np.issubdtype(ref.dtype, np.number) or not np.issubdtype(got.dtype, np.number):
+        ok = bool(np.array_equal(ref, got))
+        return {
+            "correctness_status": "ok" if ok else "mismatch",
+            "max_abs_error": 0.0 if ok else "",
+            "max_rel_error": 0.0 if ok else "",
+            "correctness_message": "exact_equal" if ok else "non_numeric_mismatch",
+        }
+    ref64 = ref.astype(np.float64)
+    got64 = got.astype(np.float64)
+    diff = np.abs(ref64 - got64)
+    max_abs = float(np.max(diff)) if diff.size else 0.0
+    denom = np.maximum(np.abs(ref64), 1e-12)
+    max_rel = float(np.max(diff / denom)) if diff.size else 0.0
+    ok = bool(np.allclose(ref64, got64, rtol=rtol, atol=atol, equal_nan=True))
+    return {
+        "correctness_status": "ok" if ok else "mismatch",
+        "max_abs_error": max_abs,
+        "max_rel_error": max_rel,
+        "correctness_message": f"rtol={rtol};atol={atol}",
+    }
+
+
+def compare_outputs(reference_outputs: object, actual_outputs: list[np.ndarray], rtol: float, atol: float) -> dict[str, object]:
+    if isinstance(reference_outputs, torch.Tensor):
+        refs = [reference_outputs.detach().cpu().numpy()]
+    elif isinstance(reference_outputs, (list, tuple)):
+        refs = [
+            item.detach().cpu().numpy() if isinstance(item, torch.Tensor) else np.asarray(item)
+            for item in reference_outputs
+        ]
+    else:
+        refs = [np.asarray(reference_outputs)]
+    if len(refs) != len(actual_outputs):
+        return {
+            "correctness_status": "output_count_mismatch",
+            "max_abs_error": "",
+            "max_rel_error": "",
+            "correctness_message": f"reference_outputs={len(refs)};actual_outputs={len(actual_outputs)}",
+        }
+    metrics = [correctness_metrics(ref, got, rtol, atol) for ref, got in zip(refs, actual_outputs)]
+    bad = [m for m in metrics if m["correctness_status"] != "ok"]
+    max_abs = max((float(m["max_abs_error"]) for m in metrics if m["max_abs_error"] != ""), default=0.0)
+    max_rel = max((float(m["max_rel_error"]) for m in metrics if m["max_rel_error"] != ""), default=0.0)
+    return {
+        "correctness_status": "ok" if not bad else bad[0]["correctness_status"],
+        "max_abs_error": max_abs,
+        "max_rel_error": max_rel,
+        "correctness_message": ";".join(str(m["correctness_message"]) for m in metrics),
+    }
+
+
 def row(
     *,
     op_name: str,
@@ -117,6 +179,10 @@ def row(
     profile_path: str = "",
     status: str = "ok",
     error_message: str = "",
+    correctness_status: str = "",
+    max_abs_error: float | str = "",
+    max_rel_error: float | str = "",
+    correctness_message: str = "",
 ) -> dict[str, object]:
     if latency_per_op_mean_ms == "":
         latency_per_op_mean_ms = stats.get("latency_mean_ms", 0.0) / max(chain_len, 1)
@@ -145,6 +211,10 @@ def row(
         "tflops": tflops(flops, stats.get("latency_mean_ms", 0.0)),
         "bandwidth_gb_s": gbps(bytes_moved, stats.get("latency_mean_ms", 0.0)),
         "gpu_mem_mb": mem_mb() if backend in ("torch_rocm", "torch_cuda") else "",
+        "correctness_status": correctness_status,
+        "max_abs_error": max_abs_error,
+        "max_rel_error": max_rel_error,
+        "correctness_message": correctness_message,
         "profile_path": profile_path,
         "status": status,
         "error_message": error_message,
@@ -248,7 +318,7 @@ def run_onnx(
     iters: int,
     profile_name: str,
     providers: list[str],
-) -> tuple[dict[str, float], str, str, float, float, str]:
+) -> tuple[dict[str, float], str, str, float, float, str, list[np.ndarray]]:
     import onnxruntime as ort
 
     so = ort.SessionOptions()
@@ -268,7 +338,7 @@ def run_onnx(
     outputs = sess.run(None, feed)
     output_shape = ";".join(str(tuple(out.shape)) for out in outputs)
     profile_path = sess.end_profiling()
-    return stats, provider, output_shape, session_create_ms, first_run_ms, profile_path
+    return stats, provider, output_shape, session_create_ms, first_run_ms, profile_path, outputs
 
 
 def conv_cases(shape_profile: str) -> list[tuple[int, int, int, int, int, int, int]]:
@@ -315,6 +385,8 @@ def torch_conv2d(batch: int, warmup: int, iters: int, repeat_id: int, shape_prof
                 stats=stats,
                 flops=flops,
                 bytes_moved=bytes_moved,
+                correctness_status="reference",
+                correctness_message="torch_eager_reference",
             )
         )
     return rows
@@ -705,6 +777,8 @@ def torch_basic_ops(
                 stats=stats,
                 flops=flops,
                 bytes_moved=bytes_moved,
+                correctness_status="reference",
+                correctness_message="torch_eager_reference",
             )
         )
     return rows
@@ -718,6 +792,8 @@ def onnx_basic_ops(
     repeat_id: int,
     shape_profile: str,
     chain_len: int,
+    correctness_rtol: float,
+    correctness_atol: float,
 ) -> list[dict[str, object]]:
     rows = []
     specs: list[tuple[str, nn.Module, tuple[torch.Tensor, ...], list[str], str, str, float, float, int]] = []
@@ -815,8 +891,18 @@ def onnx_basic_ops(
                 for n, t in zip(input_names, inputs)
             }
             profile_name = f"ort_{name}_{shape_profile}_chain{effective_chain_len}_bs{batch}_rep{repeat_id}"
-            stats, provider, output_shape, session_create_ms, first_run_ms, profile_path = run_onnx(path, feed, warmup, iters, profile_name, RUNTIME.onnx_providers)
+            stats, provider, output_shape, session_create_ms, first_run_ms, profile_path, ort_outputs = run_onnx(
+                path,
+                feed,
+                warmup,
+                iters,
+                profile_name,
+                RUNTIME.onnx_providers,
+            )
             graph_ops = onnx_graph_ops(path)
+            with torch.no_grad():
+                reference_outputs = module(*inputs)
+            correctness = compare_outputs(reference_outputs, ort_outputs, rtol=correctness_rtol, atol=correctness_atol)
             rows.append(
                 row(
                     op_name=name,
@@ -838,6 +924,10 @@ def onnx_basic_ops(
                     stats=stats,
                     flops=flops,
                     bytes_moved=bytes_moved,
+                    correctness_status=str(correctness["correctness_status"]),
+                    max_abs_error=correctness["max_abs_error"],
+                    max_rel_error=correctness["max_rel_error"],
+                    correctness_message=str(correctness["correctness_message"]),
                 )
             )
         except Exception as exc:
@@ -894,6 +984,10 @@ def write_rows(rows: list[dict[str, object]], output: Path) -> None:
         "tflops",
         "bandwidth_gb_s",
         "gpu_mem_mb",
+        "correctness_status",
+        "max_abs_error",
+        "max_rel_error",
+        "correctness_message",
         "profile_path",
         "status",
         "error_message",
@@ -918,6 +1012,8 @@ def main() -> None:
     parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
     parser.add_argument("--onnx-providers", default="auto", help="auto or comma list such as CUDAExecutionProvider,CPUExecutionProvider")
     parser.add_argument("--device-label", default="auto", help="auto or a stable label such as rx9070xt_rocm/rtx3080_cuda")
+    parser.add_argument("--correctness-rtol", type=float, default=1e-3)
+    parser.add_argument("--correctness-atol", type=float, default=1e-4)
     args = parser.parse_args()
 
     global RUNTIME
@@ -944,7 +1040,19 @@ def main() -> None:
                 rows.extend(torch_basic_ops(batch, args.seq_len, args.warmup, args.iters, repeat_id, args.shape_profile, args.chain_len))
             if run_onnx:
                 print(f"Running onnx ops repeat={repeat_id} batch={batch}")
-                rows.extend(onnx_basic_ops(batch, args.seq_len, args.warmup, args.iters, repeat_id, args.shape_profile, args.chain_len))
+                rows.extend(
+                    onnx_basic_ops(
+                        batch,
+                        args.seq_len,
+                        args.warmup,
+                        args.iters,
+                        repeat_id,
+                        args.shape_profile,
+                        args.chain_len,
+                        args.correctness_rtol,
+                        args.correctness_atol,
+                    )
+                )
 
     output = Path(args.output)
     write_rows(rows, output)

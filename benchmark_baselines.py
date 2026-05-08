@@ -56,6 +56,31 @@ def percentile(values: list[float], q: float) -> float:
     return float(np.percentile(np.asarray(values, dtype=np.float64), q))
 
 
+def correctness_metrics(reference: np.ndarray, actual: np.ndarray, rtol: float = 1e-3, atol: float = 1e-4) -> dict[str, object]:
+    ref = np.asarray(reference)
+    got = np.asarray(actual)
+    if ref.shape != got.shape:
+        return {
+            "correctness_status": "shape_mismatch",
+            "max_abs_error": "",
+            "max_rel_error": "",
+            "correctness_message": f"reference_shape={ref.shape};actual_shape={got.shape}",
+        }
+    ref64 = ref.astype(np.float64)
+    got64 = got.astype(np.float64)
+    diff = np.abs(ref64 - got64)
+    max_abs = float(np.max(diff)) if diff.size else 0.0
+    denom = np.maximum(np.abs(ref64), 1e-12)
+    max_rel = float(np.max(diff / denom)) if diff.size else 0.0
+    ok = bool(np.allclose(ref64, got64, rtol=rtol, atol=atol, equal_nan=True))
+    return {
+        "correctness_status": "ok" if ok else "mismatch",
+        "max_abs_error": max_abs,
+        "max_rel_error": max_rel,
+        "correctness_message": f"rtol={rtol};atol={atol}",
+    }
+
+
 def benchmark_callable(fn: Callable[[], None], warmup: int, iters: int) -> dict[str, float]:
     for _ in range(warmup):
         fn()
@@ -130,6 +155,10 @@ def run_resnet18_torch(batch_size: int, warmup: int, iters: int) -> dict[str, ob
         "metric_name": "pseudo_top1",
         "metric_value": pseudo_acc,
         "gpu_mem_mb": get_gpu_mem_mb(),
+        "correctness_status": "reference",
+        "max_abs_error": "",
+        "max_rel_error": "",
+        "correctness_message": "torch_eager_reference",
     }
 
 
@@ -152,7 +181,7 @@ def export_resnet18_onnx(batch_size: int) -> Path:
     return path
 
 
-def run_resnet18_onnx(batch_size: int, warmup: int, iters: int) -> dict[str, object]:
+def run_resnet18_onnx(batch_size: int, warmup: int, iters: int, correctness_rtol: float, correctness_atol: float) -> dict[str, object]:
     import onnxruntime as ort
 
     path = export_resnet18_onnx(batch_size)
@@ -164,6 +193,10 @@ def run_resnet18_onnx(batch_size: int, warmup: int, iters: int) -> dict[str, obj
 
     stats = benchmark_callable(lambda: sess.run(None, {"input": x}), warmup, iters)
     logits = sess.run(None, {"input": x})[0]
+    ref_model = resnet18(weights=ResNet18_Weights.DEFAULT).eval()
+    with torch.no_grad():
+        ref_logits = ref_model(images).detach().numpy()
+    correctness = correctness_metrics(ref_logits, logits, rtol=correctness_rtol, atol=correctness_atol)
     preds = np.argmax(logits, axis=1)
     pseudo_acc = float(np.mean(preds[: len(labels)] == labels.numpy()))
 
@@ -178,6 +211,10 @@ def run_resnet18_onnx(batch_size: int, warmup: int, iters: int) -> dict[str, obj
         "metric_name": "pseudo_top1",
         "metric_value": pseudo_acc,
         "gpu_mem_mb": "",
+        "correctness_status": correctness["correctness_status"],
+        "max_abs_error": correctness["max_abs_error"],
+        "max_rel_error": correctness["max_rel_error"],
+        "correctness_message": correctness["correctness_message"],
     }
 
 
@@ -222,6 +259,10 @@ def run_distilbert_torch(batch_size: int, seq_len: int, warmup: int, iters: int)
         "metric_name": "pred_positive_ratio",
         "metric_value": float(np.mean(preds)),
         "gpu_mem_mb": get_gpu_mem_mb(),
+        "correctness_status": "reference",
+        "max_abs_error": "",
+        "max_rel_error": "",
+        "correctness_message": "torch_eager_reference",
     }
 
 
@@ -246,7 +287,14 @@ def export_distilbert_onnx(batch_size: int, seq_len: int) -> Path:
     return path
 
 
-def run_distilbert_onnx(batch_size: int, seq_len: int, warmup: int, iters: int) -> dict[str, object]:
+def run_distilbert_onnx(
+    batch_size: int,
+    seq_len: int,
+    warmup: int,
+    iters: int,
+    correctness_rtol: float,
+    correctness_atol: float,
+) -> dict[str, object]:
     import onnxruntime as ort
 
     path = export_distilbert_onnx(batch_size, seq_len)
@@ -260,6 +308,13 @@ def run_distilbert_onnx(batch_size: int, seq_len: int, warmup: int, iters: int) 
 
     stats = benchmark_callable(lambda: sess.run(None, inputs), warmup, iters)
     logits = sess.run(None, inputs)[0]
+    ref_model = AutoModelForSequenceClassification.from_pretrained(
+        DISTILBERT_MODEL_ID,
+        cache_dir=str(HF_MODEL_DIR),
+    ).eval()
+    with torch.no_grad():
+        ref_logits = ref_model(**batch).logits.detach().numpy()
+    correctness = correctness_metrics(ref_logits, logits, rtol=correctness_rtol, atol=correctness_atol)
     preds = np.argmax(logits, axis=1)
 
     return {
@@ -273,6 +328,10 @@ def run_distilbert_onnx(batch_size: int, seq_len: int, warmup: int, iters: int) 
         "metric_name": "pred_positive_ratio",
         "metric_value": float(np.mean(preds)),
         "gpu_mem_mb": "",
+        "correctness_status": correctness["correctness_status"],
+        "max_abs_error": correctness["max_abs_error"],
+        "max_rel_error": correctness["max_rel_error"],
+        "correctness_message": correctness["correctness_message"],
     }
 
 
@@ -301,6 +360,10 @@ def write_csv(rows: list[dict[str, object]], output: Path) -> None:
         "metric_name",
         "metric_value",
         "gpu_mem_mb",
+        "correctness_status",
+        "max_abs_error",
+        "max_rel_error",
+        "correctness_message",
     ]
     with output.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -322,6 +385,8 @@ def main() -> None:
     parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
     parser.add_argument("--onnx-providers", default="auto", help="auto or comma list such as CUDAExecutionProvider,CPUExecutionProvider")
     parser.add_argument("--device-label", default="auto", help="auto or a stable label such as rx9070xt_rocm/rtx3080_cuda")
+    parser.add_argument("--correctness-rtol", type=float, default=1e-3)
+    parser.add_argument("--correctness-atol", type=float, default=1e-4)
     args = parser.parse_args()
 
     global RUNTIME
@@ -347,7 +412,7 @@ def main() -> None:
             rows.append(run_resnet18_torch(batch_size, args.warmup, args.iters))
         if selected(models, "resnet18") and selected(backends, "onnx"):
             print(f"Running ResNet18 onnx batch={batch_size}")
-            rows.append(run_resnet18_onnx(batch_size, args.warmup, args.iters))
+            rows.append(run_resnet18_onnx(batch_size, args.warmup, args.iters, args.correctness_rtol, args.correctness_atol))
 
     for batch_size in parse_csv_ints(args.bert_batches):
         if selected(models, "distilbert") and selected(backends, "torch"):
@@ -355,7 +420,16 @@ def main() -> None:
             rows.append(run_distilbert_torch(batch_size, args.seq_len, args.warmup, args.iters))
         if selected(models, "distilbert") and selected(backends, "onnx"):
             print(f"Running DistilBERT onnx batch={batch_size} seq={args.seq_len}")
-            rows.append(run_distilbert_onnx(batch_size, args.seq_len, args.warmup, args.iters))
+            rows.append(
+                run_distilbert_onnx(
+                    batch_size,
+                    args.seq_len,
+                    args.warmup,
+                    args.iters,
+                    args.correctness_rtol,
+                    args.correctness_atol,
+                )
+            )
 
     output = Path(args.output)
     write_csv(rows, output)

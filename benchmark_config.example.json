@@ -13,6 +13,8 @@
   "onnx_backend": "auto",
   "onnx_providers": "auto",
   "device_label": "auto",
+  "correctness_rtol": 0.001,
+  "correctness_atol": 0.0001,
   "baseline_models": "all",
   "baseline_backends": "all",
   "resnet_batches": "1,8,16,32,64",

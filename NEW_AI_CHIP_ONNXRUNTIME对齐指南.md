@@ -153,6 +153,9 @@ batch_size
 latency_mean_ms
 latency_per_op_mean_ms
 latency_p95_ms
+correctness_status
+max_abs_error
+max_rel_error
 profile_path
 status
 error_message
@@ -187,6 +190,9 @@ Transpose
 Cast
 Constant
 Identity
+
+正确性要求:
+每个接入到 YourChipExecutionProvider 的算子都应先做到 correctness_status=ok，再进入性能优化。若低精度内核需要放宽 correctness_rtol/correctness_atol，应在 run 的文档中记录精度模式、误差来源和业务可接受范围。
 
 P1:
 BatchNormalization
