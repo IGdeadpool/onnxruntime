@@ -743,6 +743,8 @@ steps_status.md
 baseline_results.csv
 operator_results.csv
 subgraph_results.csv
+gpu_streams_results.csv
+gpu_pinned_memory_results.csv
 profile_collect_summary.txt
 profile_summary.csv
 profile_summary.json
@@ -774,6 +776,12 @@ operator_results.csv:
 subgraph_results.csv:
 模型子图级 benchmark 原始结果，覆盖 conv_bn_relu、resnet_basic_block、transformer_mlp、self_attention。
 该层级用于判断算子组合、融合、layout transform、memory planning、attention/MLP 子图是否成为瓶颈。
+
+gpu_streams_results.csv:
+可选 GPU stream 并发专项测试，CUDA 和 ROCm 共用。默认跳过，配置 `run_gpu_aux=true` 后生成。
+
+gpu_pinned_memory_results.csv:
+可选 pageable/pinned H2D/D2H、copy/compute overlap、pin_memory 开销测试，CUDA 和 ROCm 共用。默认跳过，配置 `run_gpu_aux=true` 后生成。
 
 正确性校验字段:
 baseline_results.csv、operator_results.csv 和 subgraph_results.csv 会包含 correctness_status、max_abs_error、max_rel_error、correctness_message。

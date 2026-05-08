@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from benchmark_runtime import RuntimeConfig, detect_runtime
 
-ROOT = Path("/home/l/benchmarks")
+ROOT = Path(os.environ.get("BENCHMARK_ROOT", "/home/l/benchmarks" if Path("/home/l").exists() else str(Path.home() / "benchmarks")))
 OUTPUT_DIR = ROOT / "outputs"
 ONNX_DIR = ROOT / "models" / "onnx_ops"
 PROFILE_DIR = OUTPUT_DIR / "ort_profiles"
@@ -222,6 +222,11 @@ def row(
 
 
 class AddModule(nn.Module):
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        return x + y
+
+
+class VectorAddModule(nn.Module):
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         return x + y
 
@@ -608,6 +613,22 @@ def torch_basic_ops(
         )
     )
 
+    vec_size = 65536 if shape_profile == "large" else 4096
+    va = torch.randn(batch, vec_size, device=dev)
+    vb = torch.randn(batch, vec_size, device=dev)
+    specs.append(
+        (
+            "vectorAdd",
+            AddChainModule(chain_len).eval().to(dev),
+            (va, vb),
+            "nc",
+            f"size={vec_size};elementwise=true",
+            float(batch * vec_size) * chain_len,
+            tensor_bytes(tuple(va.shape), tuple(vb.shape), tuple(va.shape)) * chain_len,
+            chain_len,
+        )
+    )
+
     hidden = 1024 if shape_profile == "large" else 768
     gelu_x = torch.randn(batch, seq_len, hidden, device=dev)
     specs.append(
@@ -647,6 +668,22 @@ def torch_basic_ops(
             f"m={m};k={k};n={n}",
             2.0 * batch * m * k * n * chain_len,
             tensor_bytes(tuple(mm_a.shape), tuple(mm_b.shape), (batch, m, n)) * chain_len,
+            chain_len,
+        )
+    )
+
+    mm_m, mm_k, mm_n = (4096, 4096, 4096) if shape_profile == "large" else (1024, 1024, 1024)
+    ma = torch.randn(mm_m, mm_k, device=dev)
+    mb = torch.randn(mm_k, mm_n, device=dev)
+    specs.append(
+        (
+            "matrixMul",
+            MatMulChainModule(chain_len).eval().to(dev),
+            (ma, mb),
+            "mk_kn",
+            f"m={mm_m};k={mm_k};n={mm_n};batch_size_ignored=true",
+            2.0 * mm_m * mm_k * mm_n * chain_len,
+            tensor_bytes(tuple(ma.shape), tuple(mb.shape), (mm_m, mm_n)) * chain_len,
             chain_len,
         )
     )
@@ -813,6 +850,11 @@ def onnx_basic_ops(
     b4 = torch.randn(*add_shape)
     specs.append(("add", AddChainModule(chain_len).eval(), (a4, b4), ["x", "y"], "nchw", f"shape={add_shape}", 0.0, tensor_bytes(tuple(a4.shape), tuple(b4.shape), tuple(a4.shape)) * chain_len, chain_len))
 
+    vec_size = 65536 if shape_profile == "large" else 4096
+    va = torch.randn(batch, vec_size)
+    vb = torch.randn(batch, vec_size)
+    specs.append(("vectorAdd", AddChainModule(chain_len).eval(), (va, vb), ["x", "y"], "nc", f"size={vec_size};elementwise=true", float(batch * vec_size) * chain_len, tensor_bytes(tuple(va.shape), tuple(vb.shape), tuple(va.shape)) * chain_len, chain_len))
+
     hidden = 1024 if shape_profile == "large" else 768
     gelu_x = torch.randn(batch, seq_len, hidden)
     specs.append(("gelu", ChainModule(GeluModule().eval(), chain_len).eval(), (gelu_x,), ["input"], "bsh", f"shape=(N,{seq_len},{hidden})", 0.0, tensor_bytes(tuple(gelu_x.shape), tuple(gelu_x.shape)) * chain_len, chain_len))
@@ -831,6 +873,23 @@ def onnx_basic_ops(
             f"m={m};k={k};n={n}",
             2.0 * batch * m * k * n * chain_len,
             tensor_bytes(tuple(mm_a.shape), tuple(mm_b.shape), (batch, m, n)) * chain_len,
+            chain_len,
+        )
+    )
+
+    mm_m, mm_k, mm_n = (4096, 4096, 4096) if shape_profile == "large" else (1024, 1024, 1024)
+    ma = torch.randn(mm_m, mm_k)
+    mb = torch.randn(mm_k, mm_n)
+    specs.append(
+        (
+            "matrixMul",
+            MatMulChainModule(chain_len).eval(),
+            (ma, mb),
+            ["x", "y"],
+            "mk_kn",
+            f"m={mm_m};k={mm_k};n={mm_n};batch_size_ignored=true",
+            2.0 * mm_m * mm_k * mm_n * chain_len,
+            tensor_bytes(tuple(ma.shape), tuple(mb.shape), (mm_m, mm_n)) * chain_len,
             chain_len,
         )
     )

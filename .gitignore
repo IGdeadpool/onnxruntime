@@ -17,6 +17,8 @@ ort_profile_history.csv
 baseline_results*.csv
 operator_results*.csv
 subgraph_results*.csv
+gpu_streams_results*.csv
+gpu_pinned_memory_results*.csv
 ort_profiles/
 runs/
 benchmark_config.local.json

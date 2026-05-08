@@ -16,7 +16,7 @@ from statistics import mean
 from benchmark_runtime import detect_runtime
 
 
-DEFAULT_ROOT = Path("/home/l/benchmarks")
+DEFAULT_ROOT = Path(os.environ.get("BENCHMARK_ROOT", "/home/l/benchmarks" if Path("/home/l").exists() else str(Path.home() / "benchmarks")))
 DEFAULT_OUTPUTS = DEFAULT_ROOT / "outputs"
 DEFAULT_RUNS = DEFAULT_ROOT / "runs"
 DEFAULT_PROFILE_DIR = DEFAULT_OUTPUTS / "ort_profiles"
@@ -775,6 +775,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-baseline", action="store_true")
     parser.add_argument("--skip-operator", action="store_true")
     parser.add_argument("--skip-subgraph", action="store_true")
+    parser.add_argument("--run-gpu-aux", action="store_true")
     parser.add_argument("--compare-run", type=Path, default=None, help="Previous run directory or operator_results.csv")
     parser.add_argument("--regression-threshold-pct", type=float, default=10.0)
     parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
@@ -803,6 +804,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subgraph-batches", default="1,8,16")
     parser.add_argument("--subgraph-warmup", type=int, default=10)
     parser.add_argument("--subgraph-iters", type=int, default=50)
+
+    parser.add_argument("--gpu-aux-warmup", type=int, default=3)
+    parser.add_argument("--gpu-aux-repeat", type=int, default=5)
+    parser.add_argument("--gpu-aux-matrix-size", type=int, default=1024)
+    parser.add_argument("--gpu-aux-iters", type=int, default=10)
     return parser
 
 
@@ -1018,9 +1024,54 @@ def main() -> int:
             [subgraph_csv],
         )
 
+    gpu_streams_csv = run_dir / "gpu_streams_results.csv"
+    gpu_pinned_csv = run_dir / "gpu_pinned_memory_results.csv"
+    if not args.run_gpu_aux:
+        skipped = write_text_output(run_dir / "gpu_aux_skipped.txt", "GPU stream/pinned-memory auxiliary benchmarks skipped by config or CLI.\n")
+        runner.record("05_gpu_aux", "skipped", time.time(), [skipped], error="--run-gpu-aux not provided")
+    else:
+        streams_script = args.script_dir / "gpu_streams_benchmark.py"
+        pinned_script = args.script_dir / "gpu_pinned_memory_benchmark.py"
+        runner.command(
+            "05_gpu_streams",
+            [
+                args.python,
+                str(streams_script),
+                "--output",
+                str(gpu_streams_csv),
+                "--matrix-size",
+                str(args.gpu_aux_matrix_size),
+                "--iters",
+                str(args.gpu_aux_iters),
+                "--warmup",
+                str(args.gpu_aux_warmup),
+                "--repeat",
+                str(args.gpu_aux_repeat),
+            ],
+            [gpu_streams_csv],
+        )
+        runner.command(
+            "06_gpu_pinned_memory",
+            [
+                args.python,
+                str(pinned_script),
+                "--output",
+                str(gpu_pinned_csv),
+                "--overlap-size",
+                str(args.gpu_aux_matrix_size),
+                "--overlap-iters",
+                str(args.gpu_aux_iters),
+                "--warmup",
+                str(args.gpu_aux_warmup),
+                "--repeat",
+                str(args.gpu_aux_repeat),
+            ],
+            [gpu_pinned_csv],
+        )
+
     profile_dir = run_dir / "ort_profiles"
     source_profile_dir = args.benchmark_root / "outputs" / "ort_profiles"
-    runner.console("[START] 05_collect_profiles")
+    runner.console("[START] 07_collect_profiles")
     copied_profiles = copy_new_profiles(source_profile_dir, profile_dir, profile_copy_start)
     collect_summary = write_profile_collect_summary(
         run_dir / "profile_collect_summary.txt",
@@ -1028,20 +1079,20 @@ def main() -> int:
         profile_dir,
         copied_profiles,
     )
-    runner.record("05_collect_profiles", "ok", time.time(), [collect_summary] + copied_profiles)
+    runner.record("07_collect_profiles", "ok", time.time(), [collect_summary] + copied_profiles)
 
     profile_summary_csv = run_dir / "profile_summary.csv"
     profile_summary_json = run_dir / "profile_summary.json"
     start = time.time()
-    runner.console("[START] 06_profile_summary")
+    runner.console("[START] 08_profile_summary")
     profile_rows = summarize_profiles(profile_dir, profile_summary_csv, profile_summary_json)
-    runner.record("06_profile_summary", "ok", start, [profile_summary_csv, profile_summary_json])
+    runner.record("08_profile_summary", "ok", start, [profile_summary_csv, profile_summary_json])
 
     operator_pair_csv = run_dir / "operator_pair_summary.csv"
     start = time.time()
-    runner.console("[START] 07_operator_summary")
+    runner.console("[START] 09_operator_summary")
     operator_summary = summarize_operator(operator_csv, operator_pair_csv)
-    runner.record("07_operator_summary", "ok", start, [operator_pair_csv])
+    runner.record("09_operator_summary", "ok", start, [operator_pair_csv])
 
     regression_rows: list[dict[str, object]] = []
     regression_csv = run_dir / "regression_report.csv"
@@ -1050,15 +1101,15 @@ def main() -> int:
         if args.compare_run.is_dir():
             previous_csv = args.compare_run / "operator_results.csv"
         start = time.time()
-        runner.console("[START] 08_regression_report")
+        runner.console("[START] 10_regression_report")
         regression_rows = compare_operator(operator_csv, previous_csv, regression_csv, args.regression_threshold_pct)
-        runner.record("08_regression_report", "ok", start, [regression_csv])
+        runner.record("10_regression_report", "ok", start, [regression_csv])
     else:
         skipped = write_text_output(run_dir / "regression_skipped.txt", "Regression report skipped because compare_run is not configured.\n")
-        runner.record("08_regression_report", "skipped", time.time(), [skipped], error="--compare-run not provided")
+        runner.record("10_regression_report", "skipped", time.time(), [skipped], error="--compare-run not provided")
 
     start = time.time()
-    runner.console("[START] 09_summary")
+    runner.console("[START] 11_summary")
     summary_path = write_summary(
         run_dir,
         args,
@@ -1070,7 +1121,7 @@ def main() -> int:
         profile_rows,
         regression_rows,
     )
-    runner.record("09_summary", "ok", start, [summary_path])
+    runner.record("11_summary", "ok", start, [summary_path])
 
     print(f"run_dir={run_dir}")
     print(f"summary={summary_path}")

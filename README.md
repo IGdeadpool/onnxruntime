@@ -137,6 +137,8 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
   baseline_results.csv
   operator_results.csv
   subgraph_results.csv
+  gpu_streams_results.csv
+  gpu_pinned_memory_results.csv
   operator_pair_summary.csv
   profile_summary.csv
   profile_summary.json
@@ -221,6 +223,12 @@ self_attention
 ```
 
 它用于连接单算子和完整模型之间的缺口：如果单算子都正确但模型性能不理想，应优先看子图级结果和 ORT profiling。
+
+`gpu_streams_results.csv` 和 `gpu_pinned_memory_results.csv` 是可选 GPU 辅助专项测试，CUDA 和 ROCm 共用同一套 PyTorch `torch.cuda` API。默认不随完整流程运行；需要排查 stream 并发、H2D/D2H 拷贝、pinned memory 和 copy/compute overlap 时，在配置里开启：
+
+```jsonc
+"run_gpu_aux": true
+```
 
 ## 正确性校验
 

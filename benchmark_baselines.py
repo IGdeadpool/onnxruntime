@@ -16,7 +16,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from benchmark_runtime import RuntimeConfig, detect_runtime
 
 
-ROOT = Path("/home/l/benchmarks")
+ROOT = Path(os.environ.get("BENCHMARK_ROOT", "/home/l/benchmarks" if Path("/home/l").exists() else str(Path.home() / "benchmarks")))
 DATA_DIR = ROOT / "data"
 MODEL_DIR = ROOT / "models"
 OUTPUT_DIR = ROOT / "outputs"

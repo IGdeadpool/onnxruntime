@@ -73,5 +73,13 @@
   "subgraph_backends": "all",
   "subgraph_batches": "1,8,16",
   "subgraph_warmup": 10,
-  "subgraph_iters": 50
+  "subgraph_iters": 50,
+
+  // GPU 辅助专项测试，CUDA 和 ROCm 共用。
+  // 默认 false，完整基线不强制运行；需要排查 stream 并发、H2D/D2H、pinned memory 时开启。
+  "run_gpu_aux": false,
+  "gpu_aux_warmup": 3,
+  "gpu_aux_repeat": 5,
+  "gpu_aux_matrix_size": 1024,
+  "gpu_aux_iters": 10
 }

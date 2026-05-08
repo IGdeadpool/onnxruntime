@@ -15,7 +15,7 @@ from benchmark_runtime import RuntimeConfig, detect_runtime
 from operator_benchmark import compare_outputs, gbps, onnx_graph_ops, pct, tflops
 
 
-ROOT = Path("/home/l/benchmarks")
+ROOT = Path(os.environ.get("BENCHMARK_ROOT", "/home/l/benchmarks" if Path("/home/l").exists() else str(Path.home() / "benchmarks")))
 OUTPUT_DIR = ROOT / "outputs"
 ONNX_DIR = ROOT / "models" / "onnx_subgraphs"
 PROFILE_DIR = OUTPUT_DIR / "ort_profiles"
