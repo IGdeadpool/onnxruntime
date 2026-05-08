@@ -181,6 +181,7 @@ summary.md
 metadata.json
 baseline_results.csv
 operator_results.csv
+subgraph_results.csv
 operator_pair_summary.csv
 profile_summary.csv
 steps_status.md

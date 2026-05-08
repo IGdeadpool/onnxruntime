@@ -742,6 +742,7 @@ metadata.json
 steps_status.md
 baseline_results.csv
 operator_results.csv
+subgraph_results.csv
 profile_collect_summary.txt
 profile_summary.csv
 profile_summary.json
@@ -770,8 +771,12 @@ baseline_results.csv:
 operator_results.csv:
 算子级 benchmark 原始结果。
 
+subgraph_results.csv:
+模型子图级 benchmark 原始结果，覆盖 conv_bn_relu、resnet_basic_block、transformer_mlp、self_attention。
+该层级用于判断算子组合、融合、layout transform、memory planning、attention/MLP 子图是否成为瓶颈。
+
 正确性校验字段:
-baseline_results.csv 和 operator_results.csv 会包含 correctness_status、max_abs_error、max_rel_error、correctness_message。
+baseline_results.csv、operator_results.csv 和 subgraph_results.csv 会包含 correctness_status、max_abs_error、max_rel_error、correctness_message。
 ONNX Runtime 行会和 PyTorch eager 参考输出比较；Torch 行标记为 reference。
 
 profile_collect_summary.txt:

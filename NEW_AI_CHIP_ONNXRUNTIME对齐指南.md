@@ -174,6 +174,22 @@ top_node_name
 top_node_ms
 ```
 
+`subgraph_results.csv` 用于新芯片从单算子走向模型的中间层验证：
+
+```text
+conv_bn_relu:
+检查 Conv / BatchNorm / Relu 的组合执行和融合机会。
+
+resnet_basic_block:
+检查残差 Add、双 Conv、BN、Relu 的端到端子图路径。
+
+transformer_mlp:
+检查 Gemm / Gelu / Gemm 的 Transformer FFN 路径。
+
+self_attention:
+检查 QKV、MatMul、Softmax、MatMul、Output projection 的 Attention 路径。
+```
+
 ## 5. 算子支持优先级
 
 建议按以下顺序接入：

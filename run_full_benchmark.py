@@ -645,16 +645,19 @@ def write_summary(
     status: list[dict[str, object]],
     baseline_csv: Path,
     operator_csv: Path,
+    subgraph_csv: Path,
     operator_summary: list[dict[str, object]],
     profile_rows: list[dict[str, object]],
     regression_rows: list[dict[str, object]],
 ) -> Path:
     baseline_rows = read_csv(baseline_csv)
     operator_rows = read_csv(operator_csv)
+    subgraph_rows = read_csv(subgraph_csv)
     baseline_errors = [r for r in baseline_rows if r.get("status") != "ok"]
     operator_errors = [r for r in operator_rows if r.get("status") != "ok"]
+    subgraph_errors = [r for r in subgraph_rows if r.get("status") != "ok"]
     correctness_issues = [
-        r for r in baseline_rows + operator_rows
+        r for r in baseline_rows + operator_rows + subgraph_rows
         if r.get("correctness_status") not in ("", "ok", "reference")
     ]
     cpu_fallback = [r for r in profile_rows if r.get("has_cpu_fallback") == "yes"]
@@ -687,6 +690,8 @@ def write_summary(
         f"- baseline errors: `{len(baseline_errors)}`",
         f"- operator rows: `{len(operator_rows)}`",
         f"- operator errors: `{len(operator_errors)}`",
+        f"- subgraph rows: `{len(subgraph_rows)}`",
+        f"- subgraph errors: `{len(subgraph_errors)}`",
         f"- correctness issues: `{len(correctness_issues)}`",
         f"- profile json summaries: `{len(profile_rows)}`",
         f"- CPU fallback profile rows: `{len(cpu_fallback)}`",
@@ -745,7 +750,7 @@ def write_summary(
             "|---|---|---:|---|---:|---:|---|",
         ]
         for row in correctness_issues[:50]:
-            item = row.get("op_name") or row.get("model") or ""
+            item = row.get("op_name") or row.get("subgraph_name") or row.get("model") or ""
             lines.append(
                 f"| {item} | {row.get('backend','')} | {row.get('batch_size','')} | "
                 f"{row.get('correctness_status','')} | {row.get('max_abs_error','')} | "
@@ -769,6 +774,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--skip-baseline", action="store_true")
     parser.add_argument("--skip-operator", action="store_true")
+    parser.add_argument("--skip-subgraph", action="store_true")
     parser.add_argument("--compare-run", type=Path, default=None, help="Previous run directory or operator_results.csv")
     parser.add_argument("--regression-threshold-pct", type=float, default=10.0)
     parser.add_argument("--onnx-backend", default="auto", help="auto,migraphx,cuda,cpu,custom")
@@ -792,12 +798,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--operator-warmup", type=int, default=10)
     parser.add_argument("--operator-iters", type=int, default=50)
+
+    parser.add_argument("--subgraph-backends", default="all")
+    parser.add_argument("--subgraph-batches", default="1,8,16")
+    parser.add_argument("--subgraph-warmup", type=int, default=10)
+    parser.add_argument("--subgraph-iters", type=int, default=50)
     return parser
 
 
 def summarize_existing_run(run_dir: Path) -> int:
     baseline_csv = run_dir / "baseline_results.csv"
     operator_csv = run_dir / "operator_results.csv"
+    subgraph_csv = run_dir / "subgraph_results.csv"
     profile_dir = run_dir / "ort_profiles"
     profile_summary_csv = run_dir / "profile_summary.csv"
     profile_summary_json = run_dir / "profile_summary.json"
@@ -813,7 +825,7 @@ def summarize_existing_run(run_dir: Path) -> int:
     print(f"[OK] operator_pair_summary rows={len(operator_rows)} output={operator_pair_csv}", flush=True)
 
     args = argparse.Namespace(run_id=run_dir.name)
-    summary_path = write_summary(run_dir, args, [], baseline_csv, operator_csv, operator_rows, profile_rows, [])
+    summary_path = write_summary(run_dir, args, [], baseline_csv, operator_csv, subgraph_csv, operator_rows, profile_rows, [])
     print(f"[OK] summary output={summary_path}", flush=True)
     return 0
 
@@ -965,9 +977,50 @@ def main() -> int:
             [operator_csv],
         )
 
+    subgraph_csv = run_dir / "subgraph_results.csv"
+    if args.skip_subgraph:
+        skipped = write_text_output(run_dir / "subgraph_skipped.txt", "Subgraph benchmark skipped by config or CLI.\n")
+        runner.record("04_subgraph", "skipped", time.time(), [skipped])
+    else:
+        subgraph_script = args.script_dir / "subgraph_benchmark.py"
+        runner.command(
+            "04_subgraph",
+            [
+                args.python,
+                str(subgraph_script),
+                "--backends",
+                args.subgraph_backends,
+                "--batches",
+                args.subgraph_batches,
+                "--seq-len",
+                str(args.seq_len),
+                "--shape-profile",
+                args.shape_profile,
+                "--repeat",
+                str(args.repeat),
+                "--warmup",
+                str(args.subgraph_warmup),
+                "--iters",
+                str(args.subgraph_iters),
+                "--output",
+                str(subgraph_csv),
+                "--onnx-backend",
+                args.onnx_backend,
+                "--onnx-providers",
+                args.onnx_providers,
+                "--device-label",
+                args.device_label,
+                "--correctness-rtol",
+                str(args.correctness_rtol),
+                "--correctness-atol",
+                str(args.correctness_atol),
+            ],
+            [subgraph_csv],
+        )
+
     profile_dir = run_dir / "ort_profiles"
     source_profile_dir = args.benchmark_root / "outputs" / "ort_profiles"
-    runner.console("[START] 04_collect_profiles")
+    runner.console("[START] 05_collect_profiles")
     copied_profiles = copy_new_profiles(source_profile_dir, profile_dir, profile_copy_start)
     collect_summary = write_profile_collect_summary(
         run_dir / "profile_collect_summary.txt",
@@ -975,20 +1028,20 @@ def main() -> int:
         profile_dir,
         copied_profiles,
     )
-    runner.record("04_collect_profiles", "ok", time.time(), [collect_summary] + copied_profiles)
+    runner.record("05_collect_profiles", "ok", time.time(), [collect_summary] + copied_profiles)
 
     profile_summary_csv = run_dir / "profile_summary.csv"
     profile_summary_json = run_dir / "profile_summary.json"
     start = time.time()
-    runner.console("[START] 05_profile_summary")
+    runner.console("[START] 06_profile_summary")
     profile_rows = summarize_profiles(profile_dir, profile_summary_csv, profile_summary_json)
-    runner.record("05_profile_summary", "ok", start, [profile_summary_csv, profile_summary_json])
+    runner.record("06_profile_summary", "ok", start, [profile_summary_csv, profile_summary_json])
 
     operator_pair_csv = run_dir / "operator_pair_summary.csv"
     start = time.time()
-    runner.console("[START] 06_operator_summary")
+    runner.console("[START] 07_operator_summary")
     operator_summary = summarize_operator(operator_csv, operator_pair_csv)
-    runner.record("06_operator_summary", "ok", start, [operator_pair_csv])
+    runner.record("07_operator_summary", "ok", start, [operator_pair_csv])
 
     regression_rows: list[dict[str, object]] = []
     regression_csv = run_dir / "regression_report.csv"
@@ -997,26 +1050,27 @@ def main() -> int:
         if args.compare_run.is_dir():
             previous_csv = args.compare_run / "operator_results.csv"
         start = time.time()
-        runner.console("[START] 07_regression_report")
+        runner.console("[START] 08_regression_report")
         regression_rows = compare_operator(operator_csv, previous_csv, regression_csv, args.regression_threshold_pct)
-        runner.record("07_regression_report", "ok", start, [regression_csv])
+        runner.record("08_regression_report", "ok", start, [regression_csv])
     else:
         skipped = write_text_output(run_dir / "regression_skipped.txt", "Regression report skipped because compare_run is not configured.\n")
-        runner.record("07_regression_report", "skipped", time.time(), [skipped], error="--compare-run not provided")
+        runner.record("08_regression_report", "skipped", time.time(), [skipped], error="--compare-run not provided")
 
     start = time.time()
-    runner.console("[START] 08_summary")
+    runner.console("[START] 09_summary")
     summary_path = write_summary(
         run_dir,
         args,
         runner.status,
         baseline_csv,
         operator_csv,
+        subgraph_csv,
         operator_summary,
         profile_rows,
         regression_rows,
     )
-    runner.record("08_summary", "ok", start, [summary_path])
+    runner.record("09_summary", "ok", start, [summary_path])
 
     print(f"run_dir={run_dir}")
     print(f"summary={summary_path}")

@@ -28,5 +28,9 @@
   "chain_len": 10,
   "repeat": 3,
   "operator_warmup": 10,
-  "operator_iters": 50
+  "operator_iters": 50,
+  "subgraph_backends": "all",
+  "subgraph_batches": "1,8,16",
+  "subgraph_warmup": 10,
+  "subgraph_iters": 50
 }

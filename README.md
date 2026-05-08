@@ -136,6 +136,7 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
   steps_status.md
   baseline_results.csv
   operator_results.csv
+  subgraph_results.csv
   operator_pair_summary.csv
   profile_summary.csv
   profile_summary.json
@@ -210,9 +211,20 @@ python ~/benchmarks/scripts/run_full_benchmark.py \
 
 `operator_pair_summary.csv` 按 `op_name + batch_size + shape_profile` 配对 Torch ROCm 与 ONNX Runtime，并使用 `latency_per_op_mean_ms` 比较。新版算子脚本会让 Torch 与 ONNX 使用同一套有效 chain：可链式算子使用配置里的 `chain_len`，pool 和 embedding 使用 `effective_chain=1`。
 
+`subgraph_results.csv` 是模型子图级 benchmark，覆盖：
+
+```text
+conv_bn_relu
+resnet_basic_block
+transformer_mlp
+self_attention
+```
+
+它用于连接单算子和完整模型之间的缺口：如果单算子都正确但模型性能不理想，应优先看子图级结果和 ORT profiling。
+
 ## 正确性校验
 
-模型级和算子级 ONNX Runtime 结果会自动和 PyTorch eager 参考输出比较，并在 CSV 中写入：
+模型级、算子级和模型子图级 ONNX Runtime 结果会自动和 PyTorch eager 参考输出比较，并在 CSV 中写入：
 
 ```text
 correctness_status

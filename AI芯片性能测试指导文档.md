@@ -1622,6 +1622,9 @@ metadata.json:
 operator_results.csv:
 记录每个算子的 status、provider、latency、p95、chain_len、profile_path、correctness_status、max_abs_error、max_rel_error。
 
+subgraph_results.csv:
+记录模型子图级 Conv-BN-ReLU、ResNet BasicBlock、Transformer MLP、Self-Attention 的 latency、p95、provider、profiling 和 correctness。该层级用于检查算子组合、融合、layout transform、memory planning 和 attention/MLP 路径。
+
 profile_summary.csv:
 记录 ORT profiling JSON 中的 Session/Node/kernel 耗时和 provider。
 
