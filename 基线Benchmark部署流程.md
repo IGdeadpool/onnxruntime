@@ -369,7 +369,7 @@ python ~/benchmarks/scripts/benchmark_baselines.py \
   --output ~/benchmarks/outputs/baseline_results.csv
 ```
 
-只运行 PyTorch ROCm：
+只运行 PyTorch GPU：
 
 ```bash
 python ~/benchmarks/scripts/benchmark_baselines.py \
@@ -377,10 +377,10 @@ python ~/benchmarks/scripts/benchmark_baselines.py \
   --backends torch \
   --warmup 10 \
   --iters 50 \
-  --output ~/benchmarks/outputs/pytorch_rocm_results.csv
+  --output ~/benchmarks/outputs/pytorch_gpu_results.csv
 ```
 
-只运行 ONNX Runtime MIGraphX：
+只运行 ONNX Runtime 自动 provider：
 
 ```bash
 python ~/benchmarks/scripts/benchmark_baselines.py \
@@ -388,7 +388,7 @@ python ~/benchmarks/scripts/benchmark_baselines.py \
   --backends onnx \
   --warmup 10 \
   --iters 50 \
-  --output ~/benchmarks/outputs/onnx_migraphx_results.csv
+  --output ~/benchmarks/outputs/onnx_provider_results.csv
 ```
 
 只跑 ResNet18：

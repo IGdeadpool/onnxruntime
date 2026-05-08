@@ -1,11 +1,36 @@
-# ONNX Runtime MIGraphX Benchmark Toolkit
+# ONNX Runtime Provider Benchmark Toolkit
 
-本仓库用于归档当前 WSL2 + ROCm + PyTorch + ONNX Runtime MIGraphX 环境下的基线测试脚本、算子级 benchmark、profiling 分析工具和部署文档。
+本仓库用于归档 ONNX Runtime provider benchmark 工具链。当前已在 WSL2 + AMD ROCm + PyTorch + ONNX Runtime MIGraphX 环境验证，同时已加入 NVIDIA CUDAExecutionProvider 自动识别支持，便于在 RTX 3080 机器上做双体系对比。
+
+## 当前进度
+
+已完成：
+
+- 配置文件驱动的一键 benchmark 流程。
+- 每次运行自动创建独立时间戳 run 目录，不覆盖旧结果。
+- 每一步输出 `steps_status.md`、日志、CSV、profile summary 和最终 `summary.md`。
+- 自动设备识别：
+  - AMD ROCm -> `torch_rocm` + `MIGraphXExecutionProvider`
+  - NVIDIA CUDA -> `torch_cuda` + `CUDAExecutionProvider`
+  - CPU only -> `torch_cpu` + `CPUExecutionProvider`
+- Torch 与 ONNX Runtime 算子 benchmark 使用同一套有效 chain 语义。
+- ROCm 当前环境 smoke test 已通过，输出目录：
+
+```text
+/home/l/benchmarks/runs/rocm_auto_provider_smoke
+```
+
+待在另一台 RTX 3080 机器验证：
+
+- CUDA 版 PyTorch 环境。
+- `onnxruntime-gpu` 的 `CUDAExecutionProvider`。
+- 与当前 AMD ROCm run 的跨体系 CSV 对比。
 
 ## 主要内容
 
 - `benchmark_baselines.py`：ResNet18 + CIFAR-10、DistilBERT + SST-2 模型级 benchmark。
-- `operator_benchmark.py`：算子级 benchmark，支持 Torch ROCm 与 ONNX Runtime MIGraphX 对比。
+- `benchmark_runtime.py`：自动识别 GPU、PyTorch backend 和 ONNX Runtime provider。
+- `operator_benchmark.py`：算子级 benchmark，支持 AMD ROCm/MIGraphX 与 NVIDIA CUDA/CUDAExecutionProvider。
 - `analyze_operator_csv.py`：算子 CSV 汇总分析脚本。
 - `download_baselines.py`：模型和数据集下载脚本。
 - `OrtProfileAnalyzer.cs`：ORT profiling JSON 可视化工具源码。
@@ -14,6 +39,7 @@
 - `AI芯片性能测试指导文档.md`：芯片性能测试层级、测试矩阵、自动化流程和问题清单。
 - `基线Benchmark部署流程.md`：当前基线 benchmark 的部署与运行流程。
 - `CODEX_CLI_CUDA部署引导.md`：另一台 RTX 3080/CUDA 机器使用 Codex CLI 部署和运行本流程的引导。
+- `NEW_AI_CHIP_ONNXRUNTIME对齐指南.md`：新 AI 芯片驱动/runtime/ONNX Runtime EP 与 benchmark 对齐指南。
 - `部署教程.md`、`使用文档.md`：环境部署和日常使用说明。
 
 ## 推荐运行目录
@@ -24,10 +50,16 @@ WSL 中推荐使用：
 /home/l/benchmarks
 ```
 
-Python 环境：
+当前 AMD ROCm Python 环境：
 
 ```bash
 source ~/torch-rocm/.venv/bin/activate
+```
+
+RTX 3080 / CUDA 机器可使用自己的 CUDA 虚拟环境，例如：
+
+```bash
+source ~/torch-cuda/.venv/bin/activate
 ```
 
 ## 模型级 benchmark

@@ -2,6 +2,14 @@
 
 本文档用于引导另一台机器上的 Codex CLI 复用本仓库，完成 NVIDIA RTX 3080 CUDA 体系的 benchmark 部署和测试，并与当前 AMD ROCm 体系结果对比。
 
+当前项目已支持自动设备识别。RTX 3080 机器上只要 PyTorch CUDA 和 `onnxruntime-gpu` 安装正确，`benchmark_runtime.py` 应自动输出：
+
+```text
+torch_backend=torch_cuda
+onnx_backend=cuda
+onnx_providers=CUDAExecutionProvider,CPUExecutionProvider
+```
+
 ## 1. 给另一个 Codex 的任务说明
 
 可以直接把下面这段交给另一台机器上的 Codex CLI：
@@ -86,6 +94,8 @@ python ~/benchmarks/scripts/benchmark_runtime.py
 ```
 
 如果只看到 `CPUExecutionProvider`，说明 `onnxruntime-gpu` 未安装正确，或者 CUDA/cuDNN 运行库不可用。
+
+如果 `torch.cuda.is_available()` 为 `False`，先不要运行 benchmark，优先修复 CUDA 版 PyTorch、NVIDIA 驱动或 WSL GPU 透传。
 
 ## 6. 配置文件
 

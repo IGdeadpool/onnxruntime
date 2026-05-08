@@ -664,7 +664,7 @@ python ~/benchmarks/scripts/operator_benchmark.py \
   --output ~/benchmarks/outputs/operator_results.csv
 ```
 
-只运行 PyTorch ROCm 算子：
+只运行 PyTorch GPU 算子：
 
 ```bash
 python ~/benchmarks/scripts/operator_benchmark.py \
@@ -672,10 +672,10 @@ python ~/benchmarks/scripts/operator_benchmark.py \
   --batches 1,8,16,32 \
   --warmup 10 \
   --iters 50 \
-  --output ~/benchmarks/outputs/operator_torch_rocm.csv
+  --output ~/benchmarks/outputs/operator_torch_gpu.csv
 ```
 
-只运行 ONNX Runtime MIGraphX 算子：
+只运行 ONNX Runtime 自动 provider 算子：
 
 ```bash
 python ~/benchmarks/scripts/operator_benchmark.py \
@@ -684,7 +684,7 @@ python ~/benchmarks/scripts/operator_benchmark.py \
   --seq-len 128 \
   --warmup 10 \
   --iters 50 \
-  --output ~/benchmarks/outputs/operator_onnx_migraphx.csv
+  --output ~/benchmarks/outputs/operator_onnx_provider.csv
 ```
 
 快速 smoke test：
@@ -698,7 +698,7 @@ python ~/benchmarks/scripts/operator_benchmark.py \
   --output ~/benchmarks/outputs/operator_smoke.csv
 ```
 
-当前覆盖的 PyTorch ROCm 算子：
+当前覆盖的 PyTorch GPU 算子：
 
 ```text
 conv2d
@@ -715,7 +715,7 @@ softmax
 embedding
 ```
 
-当前覆盖的 ONNX Runtime MIGraphX 单算子模型：
+当前覆盖的 ONNX Runtime provider 单算子模型：
 
 ```text
 relu
@@ -760,11 +760,11 @@ error_message
 说明：
 
 ```text
-provider 字段用于判断 ONNX Runtime 是否启用了 MIGraphXExecutionProvider。
+provider 字段用于判断 ONNX Runtime 是否启用了目标 Execution Provider，例如 MIGraphXExecutionProvider、CUDAExecutionProvider 或未来的 YourChipExecutionProvider。
 graph_ops 字段记录导出的 ONNX graph 中实际包含的 op_type，例如 Gemm、Conv、LayerNormalization、Gather。
 output_shape 字段记录实际运行输出 shape，不再使用 unknown 占位。
-gpu_mem_mb 只对 PyTorch ROCm 后端有效，ONNX Runtime MIGraphX 的显存不经过 PyTorch allocator。
-ONNX Runtime 首次运行会触发 MIGraphX 编译，正式测试应使用 warmup 排除首次编译开销。
+gpu_mem_mb 只对 PyTorch GPU 后端有效，ONNX Runtime provider 的显存通常不经过 PyTorch allocator。
+ONNX Runtime 首次运行可能触发 provider 编译或初始化，正式测试应使用 warmup 排除首次编译开销。
 ```
 
 ## 10. 算子级 Benchmark v2 修改记录
@@ -1161,6 +1161,43 @@ profile_path 正常生成
 
 本节记录当前环境下已经形成的自动化测试闭环，以及后续继续向“芯片优化指导工具链”演进时需要补齐的问题。
 
+### 11.0 当前项目状态
+
+当前 benchmark 工具链已经从单一 AMD MIGraphX 验证，扩展为可自动识别 ONNX Runtime provider 的通用流程：
+
+```text
+AMD ROCm:
+torch_backend=torch_rocm
+ONNX Runtime provider=MIGraphXExecutionProvider
+
+NVIDIA CUDA:
+torch_backend=torch_cuda
+ONNX Runtime provider=CUDAExecutionProvider
+
+CPU:
+torch_backend=torch_cpu
+ONNX Runtime provider=CPUExecutionProvider
+```
+
+当前 AMD RX 9070 XT + WSL2 ROCm 环境已完成 smoke test：
+
+```text
+run_id=rocm_auto_provider_smoke
+device_name=AMD Radeon RX 9070 XT
+torch_backend=torch_rocm
+onnx_backend=migraphx
+onnx_providers=MIGraphXExecutionProvider,CPUExecutionProvider
+```
+
+对于新 AI 芯片，目标应是实现类似：
+
+```text
+torch_backend=torch_<your_backend> 或 native runtime backend
+ONNX Runtime provider=YourChipExecutionProvider,CPUExecutionProvider
+```
+
+并使 `operator_results.csv`、`profile_summary.csv`、`operator_pair_summary.csv` 能按同一结构输出。
+
 ### 11.1 当前已有流程
 
 当前测试链路已经覆盖：
@@ -1509,4 +1546,107 @@ profile 自动摘要
 子图级 benchmark
 功耗/频率/带宽 telemetry
 性能回退阈值和自动报告
+```
+
+## 12. 新 AI 芯片与 ONNX Runtime 对齐建议
+
+如果要基于当前 benchmark 测试一款新的 AI 芯片，不建议让驱动直接理解 ONNX。推荐软件栈分层：
+
+```text
+ONNX Runtime
+  |
+YourChipExecutionProvider
+  |
+YourChip Runtime / Compiler
+  |
+User Driver / HAL
+  |
+Kernel Driver
+  |
+AI Chip
+```
+
+各层职责：
+
+```text
+ONNX Runtime:
+模型加载、图优化、子图 partition、调用 Execution Provider。
+
+YourChipExecutionProvider:
+声明支持哪些 ONNX op，将 ORT 子图转换成芯片 IR，调用 runtime 编译和执行。
+
+Runtime / Compiler:
+图编译、算子 lowering、layout、memory planning、kernel 选择、profiling timestamp。
+
+User Driver / HAL:
+device open/close、memory alloc、DMA、command buffer、queue submit、sync。
+
+Kernel Driver:
+设备枚举、MMU、IRQ、reset、power、错误恢复。
+```
+
+建议 bring-up 顺序：
+
+```text
+1. 裸驱动 bring-up:
+   设备枚举、寄存器访问、DMA、命令队列、IRQ、reset。
+
+2. runtime bring-up:
+   malloc/memcpy/launch/sync/profile。
+
+3. native 单算子:
+   Add、Relu、MatMul、Gemm、Conv。
+
+4. ONNX Runtime EP 最小接入:
+   YourChipExecutionProvider 能接住 Add/Relu/MatMul/Gemm。
+
+5. 运行当前 operator_benchmark.py:
+   status=ok，provider=YourChipExecutionProvider,CPUExecutionProvider。
+
+6. 运行模型子图:
+   Conv+BN+Relu、Attention block、MLP block。
+
+7. 运行模型级 benchmark:
+   ResNet18、DistilBERT。
+
+8. 性能优化:
+   使用 operator_pair_summary.csv 和 profile_summary.csv 定位 kernel/runtime/driver 瓶颈。
+```
+
+与当前 benchmark 对齐的关键输出：
+
+```text
+metadata.json:
+记录 device_label、device_name、torch_backend 或 native backend、onnx_providers。
+
+operator_results.csv:
+记录每个算子的 status、provider、latency、p95、chain_len、profile_path。
+
+profile_summary.csv:
+记录 ORT profiling JSON 中的 Session/Node/kernel 耗时和 provider。
+
+operator_pair_summary.csv:
+按 op_name + batch_size + shape_profile 对比不同 backend 的 per-op 延迟。
+```
+
+判断问题的方式：
+
+```text
+status=error:
+算子支持、shape 支持、compiler lowering 或 runtime 执行失败。
+
+provider=CPUExecutionProvider:
+EP 没接住图，或者 GetCapability/partition 失败。
+
+session_create_ms 高:
+编译耗时高，或缺少 compile cache。
+
+first_run_ms 高:
+lazy init、memory allocation、kernel load 或首次 command queue 初始化开销。
+
+latency_mean_ms 高:
+kernel、DMA、layout transform、memory planning 或 queue overhead。
+
+p95/mean 高:
+驱动调度抖动、同步机制、频率变化、内存碎片或系统负载。
 ```

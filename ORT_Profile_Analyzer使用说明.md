@@ -16,6 +16,33 @@
 6. 下方 `Comparison by op + batch` 会按 `op_name + batch_size` 自动比较最早记录和最新记录。
 7. 点击 `Export Compare CSV` 可导出优化前后对比结果。
 
+## 与当前 benchmark 流程的关系
+
+当前自动化 benchmark 会为每次运行生成：
+
+```text
+/home/l/benchmarks/runs/<run_id>/ort_profiles/*.json
+/home/l/benchmarks/runs/<run_id>/profile_summary.csv
+```
+
+本工具适合在 Windows 侧交互式查看 ORT profiling JSON，并按 `op_name + batch_size` 记录多轮优化结果。
+
+如果只是批量汇总，不需要打开 GUI，可以直接使用：
+
+```bash
+python ~/benchmarks/scripts/run_full_benchmark.py \
+  --summarize-run /home/l/benchmarks/runs/<run_id>
+```
+
+当前 benchmark 已支持 AMD ROCm/MIGraphX 和 NVIDIA CUDAExecutionProvider。导入 JSON 时建议在 `Run label` 中写清楚设备，例如：
+
+```text
+rx9070xt_rocm_before
+rx9070xt_rocm_after
+rtx3080_cuda_before
+rtx3080_cuda_after
+```
+
 ## 关键字段
 
 - `model_run_mean_ms`：ORT 单次 `model_run` 平均耗时，适合做优化前后主对比。
