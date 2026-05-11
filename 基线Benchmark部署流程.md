@@ -778,10 +778,21 @@ subgraph_results.csv:
 该层级用于判断算子组合、融合、layout transform、memory planning、attention/MLP 子图是否成为瓶颈。
 
 gpu_streams_results.csv:
-可选 GPU stream 并发专项测试，CUDA 和 ROCm 共用。默认跳过，配置 `run_gpu_aux=true` 后生成。
+可选 GPU stream 并发专项测试，CUDA 和 ROCm 共用。默认跳过，配置 `run_gpu_aux=true` 后生成。脚本会先创建 CSV，再按 `single_stream/serial/multi_stream/copy_compute_overlap` 逐项打印进度并增量写入。
 
 gpu_pinned_memory_results.csv:
-可选 pageable/pinned H2D/D2H、copy/compute overlap、pin_memory 开销测试，CUDA 和 ROCm 共用。默认跳过，配置 `run_gpu_aux=true` 后生成。
+可选 pageable/pinned H2D/D2H、copy/compute overlap、pin_memory 开销测试，CUDA 和 ROCm 共用。默认跳过，配置 `run_gpu_aux=true` 后生成。默认参数是快速诊断模式：
+
+```jsonc
+"gpu_aux_warmup": 1,
+"gpu_aux_repeat": 3,
+"gpu_aux_matrix_size": 256,
+"gpu_aux_iters": 1,
+"gpu_aux_kernels": "vectorAdd,gemm",
+"gpu_aux_streams": "2,4"
+```
+
+如果要做压力测试，可手动提高到 `gpu_aux_matrix_size=1024`、`gpu_aux_iters=10`、`gpu_aux_repeat=5`，并建议单独运行，避免完整流程被长时间 stream/拷贝测试阻塞。运行期间显存不下降通常是 PyTorch/ROCm 缓存和测试进程仍在持有张量，进程结束后才会完全释放。
 
 正确性校验字段:
 baseline_results.csv、operator_results.csv 和 subgraph_results.csv 会包含 correctness_status、max_abs_error、max_rel_error、correctness_message。

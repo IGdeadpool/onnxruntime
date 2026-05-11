@@ -805,10 +805,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subgraph-warmup", type=int, default=10)
     parser.add_argument("--subgraph-iters", type=int, default=50)
 
-    parser.add_argument("--gpu-aux-warmup", type=int, default=3)
-    parser.add_argument("--gpu-aux-repeat", type=int, default=5)
-    parser.add_argument("--gpu-aux-matrix-size", type=int, default=1024)
-    parser.add_argument("--gpu-aux-iters", type=int, default=10)
+    parser.add_argument("--gpu-aux-warmup", type=int, default=1)
+    parser.add_argument("--gpu-aux-repeat", type=int, default=3)
+    parser.add_argument("--gpu-aux-matrix-size", type=int, default=256)
+    parser.add_argument("--gpu-aux-iters", type=int, default=1)
+    parser.add_argument("--gpu-aux-kernels", default="vectorAdd,gemm")
+    parser.add_argument("--gpu-aux-streams", default="2,4")
     return parser
 
 
@@ -1039,10 +1041,14 @@ def main() -> int:
                 str(streams_script),
                 "--output",
                 str(gpu_streams_csv),
+                "--kernels",
+                str(args.gpu_aux_kernels),
                 "--matrix-size",
                 str(args.gpu_aux_matrix_size),
                 "--iters",
                 str(args.gpu_aux_iters),
+                "--num-streams",
+                str(args.gpu_aux_streams),
                 "--warmup",
                 str(args.gpu_aux_warmup),
                 "--repeat",

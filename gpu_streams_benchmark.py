@@ -14,6 +14,24 @@ from benchmark_runtime import detect_runtime
 
 ROOT = Path(os.environ.get("BENCHMARK_ROOT", "/home/l/benchmarks" if Path("/home/l").exists() else str(Path.home() / "benchmarks")))
 OUTPUT_DIR = ROOT / "outputs"
+FIELDS = [
+    "experiment",
+    "backend",
+    "kernel",
+    "num_streams",
+    "matrix_size",
+    "iters_per_stream",
+    "total_work_iters",
+    "latency_mean_ms",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "latency_min_ms",
+    "latency_max_ms",
+    "speedup_vs_serial",
+    "gpu_mem_mb",
+    "status",
+    "error_message",
+]
 
 
 def setup_env() -> None:
@@ -148,6 +166,7 @@ def multistream_prealloc(kernel_cls: type, size: int, iters: int, num_streams: i
 
 
 def measure(fn: Callable[[], None], warmup: int, repeat: int) -> list[float]:
+    torch.cuda.reset_peak_memory_stats()
     for _ in range(warmup):
         fn()
     return [wall_ms(fn) for _ in range(repeat)]
@@ -186,40 +205,34 @@ def copy_compute_overlap(size: int, iters: int, warmup: int, repeat: int) -> tup
 
 
 def write_csv(rows: list[dict[str, object]], path: Path) -> None:
-    fields = [
-        "experiment",
-        "backend",
-        "kernel",
-        "num_streams",
-        "matrix_size",
-        "iters_per_stream",
-        "total_work_iters",
-        "latency_mean_ms",
-        "latency_p50_ms",
-        "latency_p95_ms",
-        "latency_min_ms",
-        "latency_max_ms",
-        "speedup_vs_serial",
-        "gpu_mem_mb",
-        "status",
-        "error_message",
-    ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+        writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def record_result(rows: list[dict[str, object]], output: Path, result: Result) -> None:
+    row = result.row()
+    rows.append(row)
+    write_csv(rows, output)
+    print(
+        "[OK] "
+        f"{row['experiment']} kernel={row['kernel']} streams={row['num_streams']} "
+        f"mean_ms={row['latency_mean_ms']} speedup={row['speedup_vs_serial']} output={output}",
+        flush=True,
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="GPU stream concurrency benchmark for CUDA and ROCm.")
     parser.add_argument("--output", default=str(OUTPUT_DIR / "gpu_streams_results.csv"))
-    parser.add_argument("--kernels", default="gemm,vectorAdd,conv2d")
-    parser.add_argument("--matrix-size", type=int, default=1024)
-    parser.add_argument("--iters", type=int, default=10)
-    parser.add_argument("--num-streams", default="2,4,8")
-    parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--repeat", type=int, default=5)
+    parser.add_argument("--kernels", default="vectorAdd,gemm")
+    parser.add_argument("--matrix-size", type=int, default=256)
+    parser.add_argument("--iters", type=int, default=1)
+    parser.add_argument("--num-streams", default="2,4")
+    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--repeat", type=int, default=3)
     args = parser.parse_args()
 
     setup_env()
@@ -228,38 +241,50 @@ def main() -> int:
     kernels = [name.strip() for name in args.kernels.split(",") if name.strip() in KERNELS]
     stream_counts = [int(x.strip()) for x in args.num_streams.split(",") if x.strip()]
     rows: list[dict[str, object]] = []
+    output = Path(args.output)
+    write_csv(rows, output)
 
     print("GPU streams benchmark")
     print(f"backend={backend}")
     print(f"device={torch.cuda.get_device_name(0)}")
+    planned = len(kernels) * (1 + len(stream_counts) * 2) + 2
+    print(
+        f"planned_experiments={planned} kernels={','.join(kernels)} streams={','.join(map(str, stream_counts))} "
+        f"matrix_size={args.matrix_size} iters={args.iters} warmup={args.warmup} repeat={args.repeat}",
+        flush=True,
+    )
+    print(f"output={output} (created before the first measurement)", flush=True)
 
     for kernel_name in kernels:
         kernel_cls = KERNELS[kernel_name]
+        print(f"[START] single_stream_prealloc kernel={kernel_name}", flush=True)
         single_fn = serial_prealloc(kernel_cls, args.matrix_size, args.iters, 1)
         single_lat = measure(single_fn, args.warmup, args.repeat)
-        rows.append(
-            Result("single_stream_prealloc", kernel_name, 1, args.matrix_size, args.iters, args.iters, single_lat, backend).row()
-        )
+        record_result(rows, output, Result("single_stream_prealloc", kernel_name, 1, args.matrix_size, args.iters, args.iters, single_lat, backend))
+        del single_fn
+        torch.cuda.empty_cache()
         for n in stream_counts:
+            print(f"[START] serial_{n}_work_items kernel={kernel_name}", flush=True)
             serial_fn = serial_prealloc(kernel_cls, args.matrix_size, args.iters, n)
             serial_lat = measure(serial_fn, args.warmup, args.repeat)
             serial_ms = float(np.mean(serial_lat)) if serial_lat else 0.0
-            rows.append(
-                Result(f"serial_{n}_work_items", kernel_name, 1, args.matrix_size, args.iters, args.iters * n, serial_lat, backend).row()
-            )
+            record_result(rows, output, Result(f"serial_{n}_work_items", kernel_name, 1, args.matrix_size, args.iters, args.iters * n, serial_lat, backend))
+            del serial_fn
+            torch.cuda.empty_cache()
 
+            print(f"[START] multi_stream_{n} kernel={kernel_name}", flush=True)
             multi_fn = multistream_prealloc(kernel_cls, args.matrix_size, args.iters, n)
             multi_lat = measure(multi_fn, args.warmup, args.repeat)
-            rows.append(
-                Result(f"multi_stream_{n}", kernel_name, n, args.matrix_size, args.iters, args.iters * n, multi_lat, backend, serial_ms).row()
-            )
+            record_result(rows, output, Result(f"multi_stream_{n}", kernel_name, n, args.matrix_size, args.iters, args.iters * n, multi_lat, backend, serial_ms))
+            del multi_fn
+            torch.cuda.empty_cache()
 
+    print("[START] copy_compute_serial/overlap kernel=gemm+h2d", flush=True)
     serial_copy, overlap_copy = copy_compute_overlap(args.matrix_size, args.iters, args.warmup, args.repeat)
     serial_ms = float(np.mean(serial_copy)) if serial_copy else 0.0
-    rows.append(Result("copy_compute_serial", "gemm+h2d", 1, args.matrix_size, args.iters, args.iters, serial_copy, backend).row())
-    rows.append(Result("copy_compute_overlap", "gemm+h2d", 2, args.matrix_size, args.iters, args.iters, overlap_copy, backend, serial_ms).row())
+    record_result(rows, output, Result("copy_compute_serial", "gemm+h2d", 1, args.matrix_size, args.iters, args.iters, serial_copy, backend))
+    record_result(rows, output, Result("copy_compute_overlap", "gemm+h2d", 2, args.matrix_size, args.iters, args.iters, overlap_copy, backend, serial_ms))
 
-    output = Path(args.output)
     write_csv(rows, output)
     print(f"Wrote {len(rows)} rows to {output}")
     return 0

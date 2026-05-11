@@ -1626,7 +1626,7 @@ subgraph_results.csv:
 记录模型子图级 Conv-BN-ReLU、ResNet BasicBlock、Transformer MLP、Self-Attention 的 latency、p95、provider、profiling 和 correctness。该层级用于检查算子组合、融合、layout transform、memory planning 和 attention/MLP 路径。
 
 gpu_streams_results.csv / gpu_pinned_memory_results.csv:
-记录 GPU stream 并发、copy/compute overlap、pageable/pinned H2D/D2H、pin_memory 开销。CUDA 和 ROCm 使用同一套 PyTorch 接口输出，适合排查 runtime/driver/memory transfer 层问题。
+记录 GPU stream 并发、copy/compute overlap、pageable/pinned H2D/D2H、pin_memory 开销。CUDA 和 ROCm 使用同一套 PyTorch 接口输出，适合排查 runtime/driver/memory transfer 层问题。默认参数是短诊断模式，结果逐项打印并增量写入 CSV；需要压力测试时再提高 matrix_size、iters、repeat。长时间占用显存时，应先确认测试进程是否仍在运行，并区分 PyTorch/ROCm 缓存占用和真实泄漏。
 
 profile_summary.csv:
 记录 ORT profiling JSON 中的 Session/Node/kernel 耗时和 provider。

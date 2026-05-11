@@ -227,8 +227,16 @@ self_attention
 `gpu_streams_results.csv` 和 `gpu_pinned_memory_results.csv` 是可选 GPU 辅助专项测试，CUDA 和 ROCm 共用同一套 PyTorch `torch.cuda` API。默认不随完整流程运行；需要排查 stream 并发、H2D/D2H 拷贝、pinned memory 和 copy/compute overlap 时，在配置里开启：
 
 ```jsonc
-"run_gpu_aux": true
+"run_gpu_aux": true,
+"gpu_aux_warmup": 1,
+"gpu_aux_repeat": 3,
+"gpu_aux_matrix_size": 256,
+"gpu_aux_iters": 1,
+"gpu_aux_kernels": "vectorAdd,gemm",
+"gpu_aux_streams": "2,4"
 ```
+
+GPU 辅助测试默认值是快速诊断模式，会在每个实验完成后立刻打印 `[OK]` 并增量写入 CSV。需要压力测试时再把 `gpu_aux_matrix_size/gpu_aux_iters/gpu_aux_repeat` 调大，例如 `1024/10/5`。运行期间显存持续占用通常来自 PyTorch/ROCm 的缓存分配和仍在运行的 Python 进程；进程结束后才会完全释放，`torch.cuda.empty_cache()` 只能释放部分缓存，不能替代结束长时间任务。
 
 ## 正确性校验
 

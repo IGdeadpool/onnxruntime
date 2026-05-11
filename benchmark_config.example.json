@@ -34,8 +34,10 @@
   "subgraph_warmup": 10,
   "subgraph_iters": 50,
   "run_gpu_aux": false,
-  "gpu_aux_warmup": 3,
-  "gpu_aux_repeat": 5,
-  "gpu_aux_matrix_size": 1024,
-  "gpu_aux_iters": 10
+  "gpu_aux_warmup": 1,
+  "gpu_aux_repeat": 3,
+  "gpu_aux_matrix_size": 256,
+  "gpu_aux_iters": 1,
+  "gpu_aux_kernels": "vectorAdd,gemm",
+  "gpu_aux_streams": "2,4"
 }

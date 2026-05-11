@@ -12,6 +12,20 @@ from benchmark_runtime import detect_runtime
 
 ROOT = Path(os.environ.get("BENCHMARK_ROOT", "/home/l/benchmarks" if Path("/home/l").exists() else str(Path.home() / "benchmarks")))
 OUTPUT_DIR = ROOT / "outputs"
+FIELDS = [
+    "experiment",
+    "backend",
+    "direction",
+    "memory_type",
+    "tensor_size_mb",
+    "num_elements",
+    "latency_mean_ms",
+    "latency_p95_ms",
+    "bandwidth_gb_s",
+    "overlap_speedup",
+    "status",
+    "error_message",
+]
 
 
 def setup_env() -> None:
@@ -42,6 +56,7 @@ def wall_ms(fn) -> float:
 
 
 def measure_copy(numel: int, direction: str, pinned: bool, warmup: int, repeat: int) -> list[float]:
+    torch.cuda.reset_peak_memory_stats()
     cpu_src = torch.randn(numel, dtype=torch.float32, pin_memory=pinned)
     gpu_src = torch.randn(numel, device="cuda", dtype=torch.float32)
     cpu_dst = torch.empty(numel, dtype=torch.float32, pin_memory=pinned)
@@ -160,38 +175,36 @@ def pinned_throughput(size: int, batches: int, warmup: int, repeat: int) -> tupl
 
 
 def write_csv(rows: list[dict[str, object]], path: Path) -> None:
-    fields = [
-        "experiment",
-        "backend",
-        "direction",
-        "memory_type",
-        "tensor_size_mb",
-        "num_elements",
-        "latency_mean_ms",
-        "latency_p95_ms",
-        "bandwidth_gb_s",
-        "overlap_speedup",
-        "status",
-        "error_message",
-    ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+        writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def record_rows(rows: list[dict[str, object]], output: Path, new_rows: list[dict[str, object]]) -> None:
+    rows.extend(new_rows)
+    write_csv(rows, output)
+    for row in new_rows:
+        print(
+            "[OK] "
+            f"{row['experiment']} direction={row['direction']} size_mb={row['tensor_size_mb']} "
+            f"mean_ms={row['latency_mean_ms']} bandwidth_gb_s={row['bandwidth_gb_s']} output={output}",
+            flush=True,
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="GPU pinned memory transfer benchmark for CUDA and ROCm.")
     parser.add_argument("--output", default=str(OUTPUT_DIR / "gpu_pinned_memory_results.csv"))
-    parser.add_argument("--size-mb", type=int, nargs="+", default=[1, 16, 64, 256])
-    parser.add_argument("--overlap-size", type=int, default=2048)
-    parser.add_argument("--overlap-iters", type=int, default=5)
-    parser.add_argument("--throughput-batches", type=int, default=16)
-    parser.add_argument("--throughput-size", type=int, default=256)
-    parser.add_argument("--pin-overhead-mb", type=int, default=256)
-    parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--repeat", type=int, default=10)
+    parser.add_argument("--size-mb", type=int, nargs="+", default=[1, 16, 64])
+    parser.add_argument("--overlap-size", type=int, default=256)
+    parser.add_argument("--overlap-iters", type=int, default=1)
+    parser.add_argument("--throughput-batches", type=int, default=4)
+    parser.add_argument("--throughput-size", type=int, default=128)
+    parser.add_argument("--pin-overhead-mb", type=int, default=16)
+    parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--repeat", type=int, default=3)
     args = parser.parse_args()
 
     setup_env()
@@ -201,16 +214,29 @@ def main() -> int:
     print(f"backend={backend}")
     print(f"device={torch.cuda.get_device_name(0)}")
     rows: list[dict[str, object]] = []
+    output = Path(args.output)
+    write_csv(rows, output)
+    print(
+        f"planned_size_mb={','.join(map(str, args.size_mb))} overlap_size={args.overlap_size} "
+        f"overlap_iters={args.overlap_iters} warmup={args.warmup} repeat={args.repeat}",
+        flush=True,
+    )
+    print(f"output={output} (created before the first measurement)", flush=True)
 
     for size_mb in args.size_mb:
-        rows.extend(pageable_vs_pinned(size_mb, args.warmup, args.repeat, backend))
+        print(f"[START] pageable_vs_pinned size_mb={size_mb}", flush=True)
+        record_rows(rows, output, pageable_vs_pinned(size_mb, args.warmup, args.repeat, backend))
+        torch.cuda.empty_cache()
 
     for direction in ("H2D", "D2H"):
+        print(f"[START] overlap_{direction} size={args.overlap_size}", flush=True)
         serial, overlapped = copy_compute_overlap(args.overlap_size, args.overlap_iters, direction, args.warmup, args.repeat)
         serial_ms = float(np.mean(serial)) if serial else 0.0
         overlap_ms = float(np.mean(overlapped)) if overlapped else 0.0
-        rows.append(
-            {
+        record_rows(
+            rows,
+            output,
+            [{
                 "experiment": f"overlap_{direction}",
                 "backend": backend,
                 "direction": direction,
@@ -223,14 +249,18 @@ def main() -> int:
                 "overlap_speedup": round(serial_ms / overlap_ms, 4) if overlap_ms > 0 else 1.0,
                 "status": "ok",
                 "error_message": "",
-            }
+            }],
         )
+        torch.cuda.empty_cache()
 
+    print("[START] throughput_batched", flush=True)
     throughput_ms, throughput_bw, total_mb = pinned_throughput(
         args.throughput_size, args.throughput_batches, args.warmup, args.repeat
     )
-    rows.append(
-        {
+    record_rows(
+        rows,
+        output,
+        [{
             "experiment": "throughput_batched",
             "backend": backend,
             "direction": "H2D",
@@ -243,12 +273,15 @@ def main() -> int:
             "overlap_speedup": 0.0,
             "status": "ok",
             "error_message": "",
-        }
+        }],
     )
 
+    print("[START] pin_overhead", flush=True)
     pin_ms, clone_ms = pin_overhead(args.pin_overhead_mb, args.repeat)
-    rows.append(
-        {
+    record_rows(
+        rows,
+        output,
+        [{
             "experiment": "pin_overhead",
             "backend": backend,
             "direction": "N/A",
@@ -261,10 +294,9 @@ def main() -> int:
             "overlap_speedup": round(pin_ms / clone_ms, 4) if clone_ms > 0 else 0.0,
             "status": "ok",
             "error_message": "",
-        }
+        }],
     )
 
-    output = Path(args.output)
     write_csv(rows, output)
     print(f"Wrote {len(rows)} rows to {output}")
     return 0
